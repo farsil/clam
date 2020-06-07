@@ -2,70 +2,73 @@
 ' A program that can be executed
 '
 TYPE PROGRAM
-    ' The program filename and extension
-    filename AS STRING * 12
-    ' The program description
-    desc AS STRING * 64
+    ' The program filename without extension
+    basename AS STRING * 8
+    ' The program title
+    title AS STRING * 32
 END TYPE
 
-' load entries, COMMAND$ contains the path as first (and only) argument
-REDIM progs(64) AS PROGRAM
-DIM progcount AS INTEGER
-progcount = LOADPROGS(COMMAND$, progs())
+' COMMAND$ contains the path as first (and only) argument
+path$ = COMMAND$ + "\"
+
+' load program database
+REDIM db(64) AS PROGRAM
+dbsize% = DBLOAD(db(), path$)
 
 DO:
-    ' check query for recognized sequences
     ' PROMPT$ displays a prompt and returns the command
-    CALL QUERY(PROMPT$, progs(), progcount)
+    CALL EXEC(db(), dbsize%, PROMPT$)
 LOOP
 
 '
-' Loads program entries from the batch files in the specified path
-' into the provided array of PROGRAMs.
+' Loads program database from the batch files in the specified path
+' into the provided array.
 '
 ' The array may be REDIMed if it is not large enough to contain all the
 ' program entries. This function will search in each detected batch file for
 ' a special comment in the first line, which starts with three colons :::.
-' If such comment is found, it is read and it will be the program full name.
+' If such comment is found, it is read and it will be the program title.
 '
+' @param db PROGRAM() the array which will contain the program database
 ' @param path STRING the path where to look for batch files
-' @param progs PROGRAM() the array which will contain the program entries
 '
-' @return the number of batch files
+' @return the number of entries in the program database
 '
-FUNCTION LOADPROGS (path AS STRING, progs() AS PROGRAM)
-    length% = UBOUND(progs)
-    lineno% = LBOUND(progs)
+FUNCTION DBLOAD (db() AS PROGRAM, path AS STRING)
+    dbsize% = UBOUND(db)
+    lineno% = LBOUND(db)
+    line$ = ""
 
     ' Saves the list of batch files to a temporary file
     SHELL "DIR /b " + path + "*.BAT > CLAM.TMP"
 
     OPEN "CLAM.TMP" FOR INPUT AS 1
     DO WHILE NOT EOF(1)
-        ' REDIM if array is too small
-        IF lineno% > length% THEN
-            DIM aux(length%) AS PROGRAM
-            FOR i% = 0 TO length%
-                aux(i%) = progs(i%)
+        ' REDIM if database is too small
+        IF lineno% > dbsize% THEN
+            DIM aux(dbsize%) AS PROGRAM
+            FOR i% = 0 TO dbsize%
+                aux(i%) = db(i%)
             NEXT
-            REDIM progs(lineno% + 64)
-            FOR i% = 0 TO length%
-                progs(i%) = aux(i%)
+            REDIM db(lineno% + 64)
+            FOR i% = 0 TO dbsize%
+                db(i%) = aux(i%)
             NEXT
-            length% = lineno% + 64
+            dbsize% = lineno% + 64
         END IF
 
         ' reads filename from the shell output read from the temporary file
-        LINE INPUT #1, progs(lineno%).filename
+        LINE INPUT #1, line$
+        db(lineno%).basename = LEFT$(line$, LEN(line$) - 4)
 
         ' reads description from first line in batch file
-        firstline$ = ""
-        OPEN path + progs(lineno%).filename FOR INPUT AS 2
+        ' line$ still holds the filename + extension when the file is opened
+        OPEN path + line$ FOR INPUT AS 2
         IF NOT EOF(2) THEN
-            LINE INPUT #2, firstline$
-            idx% = INSTR(firstline$, ":::")
+            LINE INPUT #2, line$
+            idx% = INSTR(line$, ":::")
             IF idx% <> 0 THEN
-                progs(lineno%).desc = LTRIM$(RIGHT$(firstline$, LEN(firstline$) - 3))
+                db(lineno%).title = LTRIM$(RIGHT$(line$, LEN(line$) - 3))
             END IF
         END IF
         CLOSE #2
@@ -74,7 +77,7 @@ FUNCTION LOADPROGS (path AS STRING, progs() AS PROGRAM)
     LOOP
     CLOSE #1
     ' lineno% is the number of files
-    LOADPROGS = lineno%
+    DBLOAD = lineno%
 END FUNCTION
 
 '
@@ -84,67 +87,107 @@ END FUNCTION
 '
 FUNCTION PROMPT$
     DIM k AS STRING
+    DEF SEG = VARSEG(k)
     line$ = ""
     PRINT " ";
+    ' The position where the line starts on the screen
+    startpos% = POS(0)
     LOCATE , , 1
     DO:
         SLEEP
         k = INKEY$
-        ' this length check avoids processing of modifier keys like Shift
         IF LEN(k) = 1 THEN
-            kcode% = ASC(k)
-            IF kcode% = 8 THEN
-                ' simulate "natural" behavior for backspace
-                IF LEN(line$) > 0 THEN
-                    ' only enable backspace if the line is not empty
-                    col% = POS(0)
-                    LOCATE , col% - 1
-                    PRINT " ";
-                    LOCATE , col% - 1
-                    line$ = LEFT$(line$, LEN(line$) - 1)
-                END IF
-            ELSEIF kcode% > 31 THEN
-                ' exclude other control characters
-                line$ = line$ + k
-                PRINT k;
-            END IF
+            ' no modifier keys, read the first byte
+            SELECT CASE PEEK(SADD(k))
+                CASE 8 ' backspace
+                    ' only enable backspace simulation if we can delete the character
+                    ' without "bumping" into the arrow prompt
+                    IF POS(0) > startpos% THEN
+                        ' derive the position of the char to remove from the column
+                        idx% = POS(0) - startpos%
+                        line$ = LEFT$(line$, idx% - 1) + RIGHT$(line$, LEN(line$) - idx%)
+                        ' redraw the line, position cursor on the character next to
+                        ' the one that was removed
+                        LOCATE , startpos%
+                        PRINT line$ + " ";
+                        LOCATE , idx% + startpos% - 1
+                    END IF
+                CASE IS > 31 ' printable characters
+                    ' derive the position where to insert the char from the column
+                    idx% = POS(0) - startpos%
+                    line$ = LEFT$(line$, idx%) + k + RIGHT$(line$, LEN(line$) - idx%)
+                    ' redraw the line, position cursor on the character next to
+                    ' the one that was inserted
+                    LOCATE , startpos%
+                    PRINT line$;
+                    LOCATE , idx% + startpos% + 1
+            END SELECT
+        ELSE
+            ' modifier keys, read the second byte
+            SELECT CASE PEEK(SADD(k) + 1)
+                CASE 71 ' home
+                    LOCATE , startpos%
+                CASE 75 ' left arrow
+                    IF POS(0) > startpos% THEN
+                        LOCATE , POS(0) - 1
+                    END IF
+                CASE 77 ' right arrow
+                    IF POS(0) < startpos% + LEN(line$) THEN
+                        LOCATE , POS(0) + 1
+                    END IF
+                CASE 79 ' end
+                    LOCATE , startpos% + LEN(line$)
+                CASE 83 ' delete
+                    ' derive the position of the char to remove from the column
+                    idx% = POS(0) - startpos% + 1
+                    line$ = LEFT$(line$, idx% - 1) + RIGHT$(line$, LEN(line$) - idx%)
+                    ' redraw the line, position cursor on the character next to
+                    ' the one that was removed
+                    LOCATE , startpos%
+                    PRINT line$ + " ";
+                    LOCATE , idx% + startpos% - 1
+            END SELECT
         END IF
     LOOP UNTIL k = CHR$(13)
+    DEF SEG
     PRINT
-    PROMPT = line$
+    PROMPT = LCASE$(line$)
 END FUNCTION
 
+
+
 '
-' Performs a query against the program database.
+' Executes a command.
 '
-' There are two special queries that are always available:
+' There are two special commands that are always available:
 '
 ' * exit (or x), which exits the program to DOS
-' * list, which lists the programs in the database
+' * list (or l), which lists the programs in the database
 '
 ' This function does not attempt to calculate the database size using
 ' UBOUND, but relies on the supplied program count.
 '
-' @param text STRING the text query
-' @param progs PROGRAM() the program database
-' @param progcount INTEGER the number of programs in the database
+' @param db PROGRAM() the program database
+' @param dbsize INTEGER the number of programs in the database
+' @param cmd STRING the text query
 '
-SUB QUERY (text AS STRING, progs() AS PROGRAM, progcount AS INTEGER)
-    text = LCASE$(text)
-    IF text = "l" OR text = "list" THEN
-        FOR i% = 0 TO progcount - 1
-            IF ASC(progs(i%).desc) <> 0 THEN
-                PRINT RTRIM$(progs(i%).desc) + " [";
+SUB EXEC (db() AS PROGRAM, dbsize AS INTEGER, cmd AS STRING)
+    IF cmd = "l" OR cmd = "list" THEN
+        FOR i% = 0 TO dbsize - 1
+            IF ASC(db(i%).title) <> 0 THEN
+                PRINT RTRIM$(db(i%).title) + " [";
             END IF
-            PRINT RTRIM$(progs(i%).filename);
-            IF ASC(progs(i%).desc) <> 0 THEN
+            PRINT RTRIM$(db(i%).basename);
+            IF ASC(db(i%).title) <> 0 THEN
                 PRINT "]";
             END IF
             PRINT
         NEXT
-        PRINT SPACE$(3) + STR$(progcount) + " batch file(s)"
-    ELSEIF text = "x" OR text = "exit" THEN
+        PRINT "   " + STR$(dbsize) + " batch file(s)"
+    ELSEIF cmd = "x" OR cmd = "exit" THEN
         END
+    ELSEIF LEN(cmd) > 0 THEN
+        PRINT "Illegal command: " + cmd + "."
     END IF
 END SUB
 
