@@ -93,7 +93,9 @@ FUNCTION PROMPT$
     ' The position where the line starts on the screen
     startpos% = POS(0)
     LOCATE , , 1
-    DO:
+    DO
+        ' clear the buffer for residual key presses before SLEEPing
+        DO: k = INKEY$: LOOP UNTIL k = ""
         SLEEP
         k = INKEY$
         IF LEN(k) = 1 THEN
@@ -151,7 +153,7 @@ FUNCTION PROMPT$
     LOOP UNTIL k = CHR$(13)
     DEF SEG
     PRINT
-    PROMPT = LCASE$(line$)
+    PROMPT = RTRIM$(LTRIM$(LCASE$(line$)))
 END FUNCTION
 
 
