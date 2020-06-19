@@ -8,6 +8,10 @@ TYPE PROGRAM
     title AS STRING * 32
 END TYPE
 
+CONST LISTIDX = -1
+CONST EXITIDX = -2
+CONST NOTFOUND = -3
+
 ' COMMAND$ contains the path as first (and only) argument
 path$ = COMMAND$ + "\"
 
@@ -17,7 +21,8 @@ dbsize% = DBLOAD(db(), path$)
 
 DO:
     ' PROMPT$ displays a prompt and returns the command
-    CALL EXEC(db(), dbsize%, PROMPT$)
+    idx% = PROMPT(db(), dbsize%)
+    CALL EXEC(db(), dbsize%, idx%)
 LOOP
 
 '
@@ -81,25 +86,79 @@ FUNCTION DBLOAD (db() AS PROGRAM, path AS STRING)
 END FUNCTION
 
 '
-' Displays a prompt and returns what the user types.
+' Finds a program in the database by attempting to match the specified query.
 '
-' @return the user input
+' There are two virtual programs that can be matched by supplying a
+' specific query:
 '
-FUNCTION PROMPT$
+' * LIST, matched by providing "list" or "l".
+' * EXIT, matched by providing "exit" or "x".
+'
+' This function returns the special indices LISTIDX (-1) and
+' EXITIDX (-2) respectively when the virtual programs are matched.
+'
+' Returns NOTFOUND (-3) when no match could be found.
+'
+' @param db PROGRAM() the program database
+' @param dbsize INTEGER the number of programs in the database
+' @param text STRING the query
+'
+' @return the program index in the database or a special index
+'
+FUNCTION FIND (db() AS PROGRAM, dbsize AS INTEGER, query AS STRING)
+    query = LCASE$(query)
+    IF query = "l" OR query = "list" THEN
+        FIND = LISTIDX
+    ELSEIF query = "x" OR query = "exit" THEN
+        FIND = EXITIDX
+    ELSE
+        ' TODO: querying the db not yet implemented
+        FIND = NOTFOUND
+    END IF
+END FUNCTION
+
+'
+' Prompts the user for the program to execute.
+'
+' This function simulates a prompt and attempts to find a program
+' by querying what the user types against the database while typing.
+'
+' When the user presses ENTER, the query stops, and the index of the matched
+' program is returned, or NOTFOUND (-3) if no programs could be matched.
+' See the FIND() function documentation for more details on the possible
+' return values.
+'
+' @param db PROGRAM() the program database
+' @param dbsize INTEGER the number of programs in the database
+'
+' @return the program index
+'
+FUNCTION PROMPT (db() AS PROGRAM, dbsize AS INTEGER)
+    DIM dbidx AS INTEGER
     DIM k AS STRING
-    DEF SEG = VARSEG(k)
     line$ = ""
+
+    ' we need direct access to the memory address of k
+    DEF SEG = VARSEG(k)
+
     PRINT " ";
-    ' The position where the line starts on the screen
-    startpos% = POS(0)
     LOCATE , , 1
+
+    ' the position where the line starts on the screen
+    startpos% = POS(0)
+
+    ' begin listening for keypresses
     DO
         ' clear the buffer for residual key presses before SLEEPing
         DO: k = INKEY$: LOOP UNTIL k = ""
+
+        ' read from the keyboard buffer
         SLEEP
         k = INKEY$
+
+        ' process the received keypress
         IF LEN(k) = 1 THEN
-            ' no modifier keys, read the first byte
+            ' no modifier keys, read the first byte of k
             SELECT CASE PEEK(SADD(k))
                 CASE 8 ' backspace
                     ' only enable backspace simulation if we can delete the character
@@ -125,7 +184,7 @@ FUNCTION PROMPT$
                     LOCATE , idx% + startpos% + 1
             END SELECT
         ELSE
-            ' modifier keys, read the second byte
+            ' modifier keys, read the second byte of k
             SELECT CASE PEEK(SADD(k) + 1)
                 CASE 71 ' home
                     LOCATE , startpos%
@@ -150,46 +209,60 @@ FUNCTION PROMPT$
                     LOCATE , idx% + startpos% - 1
             END SELECT
         END IF
+
+        ' update the database index with the current line
+        dbidx = FIND(db(), dbsize, RTRIM$(LTRIM$(line$)))
     LOOP UNTIL k = CHR$(13)
-    DEF SEG
+
+    ' the user expects a newline when they press enter
     PRINT
-    PROMPT = RTRIM$(LTRIM$(LCASE$(line$)))
+
+    ' restore the default segment, we're done with k
+    DEF SEG
+
+    IF dbidx = NOTFOUND THEN
+        PRINT "Illegal query: " + RTRIM$(LTRIM$(line$)) + "."
+    END IF
+    PROMPT = dbidx
 END FUNCTION
 
-
-
 '
-' Executes a command.
+' Executes the program in the database at the specified index.
 '
-' There are two special commands that are always available:
+' There are two virtual programs that are always possible to execute:
 '
-' * exit (or x), which exits the program to DOS
-' * list (or l), which lists the programs in the database
+' * LIST, which lists the programs in the database.
+' * EXIT, which exits the program to DOS.
+'
+' They are invoked by suppliyng the special program indices LISTIDX (-1)
+' and EXITIDX (-2).
+'
+' Nothing is executed if NOTFOUND (-3) is passed as an index.
 '
 ' This function does not attempt to calculate the database size using
 ' UBOUND, but relies on the supplied program count.
 '
 ' @param db PROGRAM() the program database
 ' @param dbsize INTEGER the number of programs in the database
-' @param cmd STRING the text query
+' @param idx INTEGER the index of the program to execute
 '
-SUB EXEC (db() AS PROGRAM, dbsize AS INTEGER, cmd AS STRING)
-    IF cmd = "l" OR cmd = "list" THEN
-        FOR i% = 0 TO dbsize - 1
-            IF ASC(db(i%).title) <> 0 THEN
-                PRINT RTRIM$(db(i%).title) + " [";
-            END IF
-            PRINT RTRIM$(db(i%).basename);
-            IF ASC(db(i%).title) <> 0 THEN
-                PRINT "]";
-            END IF
-            PRINT
-        NEXT
-        PRINT "   " + STR$(dbsize) + " batch file(s)"
-    ELSEIF cmd = "x" OR cmd = "exit" THEN
-        END
-    ELSEIF LEN(cmd) > 0 THEN
-        PRINT "Illegal command: " + cmd + "."
-    END IF
+SUB EXEC (db() AS PROGRAM, dbsize AS INTEGER, idx AS INTEGER)
+    SELECT CASE idx
+        CASE LISTIDX
+            FOR i% = 0 TO dbsize - 1
+                IF ASC(db(i%).title) <> 0 THEN
+                    PRINT RTRIM$(db(i%).title) + " [";
+                END IF
+                PRINT RTRIM$(db(i%).basename);
+                IF ASC(db(i%).title) <> 0 THEN
+                    PRINT "]";
+                END IF
+                PRINT
+            NEXT
+            PRINT "   " + STR$(dbsize) + " batch file(s)"
+        CASE EXITIDX
+            END
+        CASE IS <> NOTFOUND
+            ' TODO: run the program
+    END SELECT
 END SUB
-
