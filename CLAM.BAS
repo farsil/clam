@@ -70,11 +70,11 @@ FUNCTION LoadDb% (Db() AS Program, Path AS STRING)
         ' REDIM if database is too small
         IF LineNo% > DbSize% THEN
             DIM Aux(DbSize%) AS Program
-            FOR I% = 0 TO DbSize%
+            FOR I% = 0 TO DbSize% - 1
                 Aux(I%) = Db(I%)
             NEXT
             REDIM Db(LineNo% + 64) AS Program
-            FOR I% = 0 TO DbSize%
+            FOR I% = 0 TO DbSize% - 1
                 Db(I%) = Aux(I%)
             NEXT
             DbSize% = LineNo% + 64
