@@ -34,7 +34,7 @@ Path$ = COMMAND$ + "\"
 
 ' REDIM is necessary because the final size may be different after
 ' invoking the loading function
-REDIM Db(64) AS Program
+REDIM Db(63) AS Program
 DbSize% = LoadDb%(Db(), Path$)
 
 DO:
@@ -57,32 +57,32 @@ LOOP
 ' @return INTEGER the number of entries in the program database
 '
 FUNCTION LoadDb% (Db() AS Program, Path AS STRING)
-    DbSize% = UBOUND(Db)
-    LineNo% = LBOUND(Db)
+    DbSize% = UBOUND(Db) - LBOUND(db) + 1
+    Index% = LBOUND(Db)
     Line$ = ""
 
-    ' Saves the list of batch files to a temporary file
+    ' saves the list of batch files to a temporary file
     SHELL "DIR /b " + Path + "*.BAT > CLAM.TMP"
 
     TmpFile = FREEFILE
     OPEN "CLAM.TMP" FOR INPUT AS #TmpFile
     DO WHILE NOT EOF(TmpFile)
         ' REDIM if database is too small
-        IF LineNo% > DbSize% THEN
-            DIM Aux(DbSize%) AS Program
+        IF Index% = DbSize% THEN
+            DIM Aux(DbSize% - 1) AS Program
             FOR I% = 0 TO DbSize% - 1
                 Aux(I%) = Db(I%)
             NEXT
-            REDIM Db(LineNo% + 64) AS Program
+            REDIM Db(DbSize% + 64) AS Program
             FOR I% = 0 TO DbSize% - 1
                 Db(I%) = Aux(I%)
             NEXT
-            DbSize% = LineNo% + 64
+            DbSize% = DbSize% + 64
         END IF
 
         ' reads filename from the shell output read from the temporary file
         LINE INPUT #TmpFile, Line$
-        Db(LineNo%).Basename = LEFT$(Line$, LEN(Line$) - 4)
+        Db(Index%).Basename = LEFT$(Line$, LEN(Line$) - 4)
 
         ' reads description from first line in batch file
         ' line$ still holds the filename + extension when the file is opened
@@ -91,16 +91,16 @@ FUNCTION LoadDb% (Db() AS Program, Path AS STRING)
         IF NOT EOF(BatFile) THEN
             LINE INPUT #BatFile, Line$
             IF INSTR(Line$, ":::") THEN
-                Db(LineNo%).Title = LTRIM$(RIGHT$(Line$, LEN(Line$) - 3))
+                Db(Index%).Title = LTRIM$(RIGHT$(Line$, LEN(Line$) - 3))
             END IF
         END IF
         CLOSE #BatFile
 
-        LineNo% = LineNo% + 1
+        Index% = Index% + 1
     LOOP
     CLOSE #TmpFile
-    ' lineno% is the number of files
-    LoadDb% = LineNo%
+    ' Index% is the number of files
+    LoadDb% = Index%
 END FUNCTION
 
 '
@@ -125,9 +125,9 @@ END FUNCTION
 '
 FUNCTION Find% (Db() AS Program, DbSize AS INTEGER, Query AS STRING)
     Query = UCASE$(Query)
-    IF Query = "L" OR INSTR("LIST", Query) THEN
+    IF Query = "L" OR Query = "LIST" THEN
         Find% = LISTIDX
-    ELSEIF Query = "X" OR INSTR("EXIT", Query) THEN
+    ELSEIF Query = "X" OR Query = "EXIT" THEN
         Find% = EXITIDX
     ELSE
         FOR I% = 0 TO DbSize - 1
