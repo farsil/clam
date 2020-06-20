@@ -27,7 +27,7 @@ DECLARE FUNCTION Find%(Db() AS Program, DbSize AS INTEGER, Query AS STRING)
 DECLARE FUNCTION Prompt% (Db() AS Program, DbSize AS INTEGER)
 
 ' executes a program
-DECLARE SUB Exec (Db() AS Program, DbSize AS INTEGER, Index AS INTEGER)
+DECLARE SUB Exec (Db() AS Program, DbSize AS INTEGER, Index AS INTEGER, Path AS STRING)
 
 ' COMMAND$ contains the path as first (and only) argument
 Path$ = COMMAND$ + "\"
@@ -39,7 +39,7 @@ DbSize% = LoadDb%(Db(), Path$)
 
 DO:
     Index% = Prompt%(Db(), DbSize%)
-    Exec Db(), DbSize%, Index%
+    Exec Db(), DbSize%, Index%, Path$
 LOOP
 
 '
@@ -90,7 +90,7 @@ FUNCTION LoadDb% (Db() AS Program, Path AS STRING)
         OPEN Path + Line$ FOR INPUT AS #BatFile
         IF NOT EOF(BatFile) THEN
             LINE INPUT #BatFile, Line$
-            IF INSTR(Line$, ":::") <> 0 THEN
+            IF INSTR(Line$, ":::") THEN
                 Db(LineNo%).Title = LTRIM$(RIGHT$(Line$, LEN(Line$) - 3))
             END IF
         END IF
@@ -124,13 +124,22 @@ END FUNCTION
 ' @return INTEGER the program index in the database or a special index
 '
 FUNCTION Find% (Db() AS Program, DbSize AS INTEGER, Query AS STRING)
-    Query = LCASE$(Query)
-    IF Query = "l" OR Query = "list" THEN
+    Query = UCASE$(Query)
+    IF Query = "L" OR INSTR("LIST", Query) THEN
         Find% = LISTIDX
-    ELSEIF Query = "x" OR Query = "exit" THEN
+    ELSEIF Query = "X" OR INSTR("EXIT", Query) THEN
         Find% = EXITIDX
     ELSE
-        ' TODO: querying the db not yet implemented
+        FOR I% = 0 TO DbSize - 1
+            ' TODO: it only finds the first right now
+            IF INSTR(UCASE$(Db(I%).Title), Query) THEN
+                Find% = I%
+                EXIT FUNCTION
+            ELSEIF INSTR(Db(I%).Basename, Query) THEN
+                Find% = I%
+                EXIT FUNCTION
+            END IF
+        NEXT
         Find% = NOTFOUND
     END IF
 END FUNCTION
@@ -265,7 +274,7 @@ END FUNCTION
 ' @param DbSize INTEGER the number of programs in the database
 ' @param Index INTEGER the index of the program to execute
 '
-SUB Exec (Db() AS Program, DbSize AS INTEGER, Index AS INTEGER)
+SUB Exec (Db() AS Program, DbSize AS INTEGER, Index AS INTEGER, Path AS STRING)
     SELECT CASE Index
         CASE LISTIDX
             FOR I% = 0 TO DbSize - 1
@@ -282,6 +291,7 @@ SUB Exec (Db() AS Program, DbSize AS INTEGER, Index AS INTEGER)
         CASE EXITIDX
             END
         CASE IS <> NOTFOUND
-            ' TODO: run the program
+            ' COMMAND /c solves loading issues with certain games
+            SHELL "COMMAND /c " + Path + Db(Index).Basename + ".BAT"
     END SELECT
 END SUB
