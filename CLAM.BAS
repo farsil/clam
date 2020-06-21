@@ -8,6 +8,13 @@ TYPE Program
     Title AS STRING * 32
 END TYPE
 
+' 80x25 text mode, but QuickBasic doesn't normally use the last row,
+' so the effective rows are 24
+CONST SCREENROWS = 24, SCREENCOLS = 80
+
+' booleans
+CONST FALSE = 0, TRUE = 1
+
 ' index of the LIST virtual program
 CONST LISTIDX = -1
 
@@ -37,6 +44,7 @@ Path$ = COMMAND$ + "\"
 REDIM Db(63) AS Program
 DbSize% = LoadDb%(Db(), Path$)
 
+PRINT
 DO:
     Index% = Prompt%(Db(), DbSize%)
     Exec Db(), DbSize%, Index%, Path$
@@ -124,24 +132,29 @@ END FUNCTION
 ' @return INTEGER the program index in the database or a special index
 '
 FUNCTION Find% (Db() AS Program, DbSize AS INTEGER, Query AS STRING)
-    Query = UCASE$(Query)
-    IF Query = "L" OR Query = "LIST" THEN
-        Find% = LISTIDX
-    ELSEIF Query = "X" OR Query = "EXIT" THEN
-        Find% = EXITIDX
-    ELSE
-        FOR I% = 0 TO DbSize - 1
-            ' TODO: it only finds the first right now
-            IF INSTR(UCASE$(Db(I%).Title), Query) THEN
-                Find% = I%
-                EXIT FUNCTION
-            ELSEIF INSTR(Db(I%).Basename, Query) THEN
-                Find% = I%
-                EXIT FUNCTION
-            END IF
-        NEXT
-        Find% = NOTFOUND
+    ' don't attempt to find anything on an empty string
+    IF LEN(Query) THEN
+        Query = UCASE$(Query)
+        IF Query = "L" OR Query = "LIST" THEN
+            Find% = LISTIDX
+            EXIT FUNCTION
+        ELSEIF Query = "X" OR Query = "EXIT" THEN
+            Find% = EXITIDX
+            EXIT FUNCTION
+        ELSE
+            FOR I% = 0 TO DbSize - 1
+                ' TODO: it only finds the first right now
+                IF INSTR(UCASE$(Db(I%).Title), Query) THEN
+                    Find% = I%
+                    EXIT FUNCTION
+                ELSEIF INSTR(Db(I%).Basename, Query) THEN
+                    Find% = I%
+                    EXIT FUNCTION
+                END IF
+            NEXT
+        END IF
     END IF
+    Find% = NOTFOUND
 END FUNCTION
 
 '
@@ -162,91 +175,107 @@ END FUNCTION
 '
 FUNCTION Prompt% (Db() AS Program, DbSize AS INTEGER)
     DIM ProgIndex AS INTEGER
-    DIM K AS STRING
+    DIM Keystroke AS STRING
+    Redraw% = FALSE
     Line$ = ""
 
-    ' we need direct access to the memory address of k
-    DEF SEG = VARSEG(K)
-
     ' -> arrow prompt
-    PRINT CHR$(26) + " ";
+    Arrow$ = CHR$(26) + " "
+    PRINT Arrow$;
     LOCATE , , 1
 
-    ' the position where the line starts on the screen
-    StartPos% = POS(0)
+    PromptRow% = CSRLIN
+    PromptLen% = LEN(Arrow$)
+
+    ' the index of the cursor relative to the line, used to determine where
+    ' to place the cursor on the screen row and where to insert or remove chars
+    CurIndex% = 0
 
     ' begin listening for keypresses
     DO
         ' clear the buffer for residual key presses before SLEEPing
-        DO: K = INKEY$: LOOP UNTIL K = ""
+        DO
+            Keystroke = INKEY$
+        LOOP UNTIL Keystroke = ""
 
         ' read from the keyboard buffer
         SLEEP
-        K = INKEY$
+        Keystroke = INKEY$
+
+        ' read the keystroke addr so we can access its bytes
+        DEF SEG = VARSEG(Keystroke)
+        KeystrokeAddr% = SADD(Keystroke)
+        DEF SEG
 
         ' process the received keypress
-        IF LEN(K) = 1 THEN
-            ' no modifier keys, read the first byte of k
-            SELECT CASE PEEK(SADD(K))
+        IF LEN(Keystroke) = 1 THEN
+            ' no modifier keys, read the first byte
+            SELECT CASE PEEK(KeystrokeAddr%)
                 CASE 8 ' backspace
-                    ' only enable backspace simulation if we can delete the character
-                    ' without "bumping" into the arrow prompt
-                    IF POS(0) > StartPos% THEN
-                        ' derive the position of the char to remove from the column
-                        Index% = POS(0) - StartPos%
-                        Line$ = LEFT$(Line$, Index% - 1) + RIGHT$(Line$, LEN(Line$) - Index%)
-                        ' redraw the line, position cursor on the character next to
-                        ' the one that was removed
-                        LOCATE , StartPos%
-                        PRINT Line$ + " ";
-                        LOCATE , Index% + StartPos% - 1
+                    ' delete the previous character and move the cursor backwards
+                    IF CurIndex% > 0 THEN
+                        Line$ = LEFT$(Line$, CurIndex% - 1) + RIGHT$(Line$, LEN(Line$) - CurIndex%)
+                        CurIndex% = CurIndex% - 1
+                        Redraw% = TRUE
                     END IF
                 CASE IS > 31 ' printable characters
-                    ' derive the position where to insert the char from the column
-                    Index% = POS(0) - StartPos%
-                    Line$ = LEFT$(Line$, Index%) + K + RIGHT$(Line$, LEN(Line$) - Index%)
-                    ' redraw the line, position cursor on the character next to
-                    ' the one that was inserted
-                    LOCATE , StartPos%
-                    PRINT Line$;
-                    LOCATE , Index% + StartPos% + 1
+                    ' insert a character and move the cursor forward
+                    Line$ = LEFT$(Line$, CurIndex%) + Keystroke + RIGHT$(Line$, LEN(Line$) - CurIndex%)
+                    CurIndex% = CurIndex% + 1
+                    Redraw% = TRUE
             END SELECT
         ELSE
-            ' modifier keys, read the second byte of k
-            SELECT CASE PEEK(SADD(K) + 1)
+            ' modifier keys, read the second byte
+            SELECT CASE PEEK(KeystrokeAddr% + 1)
                 CASE 71 ' home
-                    LOCATE , StartPos%
+                    ' move the cursor to the beginning of the line
+                    CurIndex% = 0
                 CASE 75 ' left arrow
-                    IF POS(0) > StartPos% THEN
-                        LOCATE , POS(0) - 1
+                    ' move the cursor backwards
+                    IF CurIndex% > 0 THEN
+                        CurIndex% = CurIndex% - 1
                     END IF
                 CASE 77 ' right arrow
-                    IF POS(0) < StartPos% + LEN(Line$) THEN
-                        LOCATE , POS(0) + 1
+                    ' move the cursor forward
+                    IF CurIndex% < LEN(Line$) THEN
+                        CurIndex% = CurIndex% + 1
                     END IF
                 CASE 79 ' end
-                    LOCATE , StartPos% + LEN(Line$)
+                    ' move the cursor to the end of the line
+                    CurIndex% = LEN(Line$)
                 CASE 83 ' delete
-                    ' derive the position of the char to remove from the column
-                    Index% = POS(0) - StartPos% + 1
-                    Line$ = LEFT$(Line$, Index% - 1) + RIGHT$(Line$, LEN(Line$) - Index%)
-                    ' redraw the line, position cursor on the character next to
-                    ' the one that was removed
-                    LOCATE , StartPos%
-                    PRINT Line$ + " ";
-                    LOCATE , Index% + StartPos% - 1
+                    ' delete a charcater
+                    IF CurIndex% < LEN(Line$) THEN
+                        Line$ = LEFT$(Line$, CurIndex%) + RIGHT$(Line$, LEN(Line$) - CurIndex% - 1)
+                        Redraw% = TRUE
+                    END IF
             END SELECT
         END IF
 
         ' update the program index with the current line
         ProgIndex = Find%(Db(), DbSize, RTRIM$(LTRIM$(Line$)))
-    LOOP UNTIL K = CHR$(13)
+
+        ' redraw the line if it changed
+        IF Redraw% THEN
+            LOCATE PromptRow%, 1
+            PRINT Arrow$ + Line$; SPACE$(SCREENCOLS - (POS(0) - 1));
+
+            ' update the prompt row if scrolling happened
+            RowsPrinted% = INT((PromptLen% + LEN(Line$)) / SCREENCOLS)
+            IF PromptRow% + RowsPrinted% > SCREENROWS THEN
+                PromptRow% = PromptRow% - 1
+            END IF
+            Redraw% = FALSE
+        END IF
+
+        ' calculate the cursor position based on the cursor index and relocate
+        CurRow% = PromptRow% + INT((PromptLen% + CurIndex%) / SCREENCOLS)
+        CurCol% = 1 + (PromptLen% + CurIndex%) MOD SCREENCOLS
+        LOCATE CurRow%, CurCol%
+    LOOP UNTIL Keystroke = CHR$(13)
 
     ' the user expects a newline when they press enter
     PRINT
-
-    ' restore the default segment, we're done with k
-    DEF SEG
 
     IF ProgIndex = NOTFOUND AND LEN(Line$) THEN
         PRINT "Illegal program: " + RTRIM$(LTRIM$(Line$)) + "."
