@@ -1,11 +1,35 @@
 '
-' A program that can be executed
+' A program that can be executed.
 '
 TYPE Program
     ' The program filename without extension
     Basename AS STRING * 8
     ' The program title
     Title AS STRING * 32
+END TYPE
+
+'
+' A node to be used with the priority queue.
+'
+TYPE QueueNode
+    ' The queue value
+    Value AS INTEGER
+    ' The priority of the program
+    Priority AS INTEGER
+    ' The next node in the queue
+    Successor AS INTEGER
+END TYPE
+
+'
+' A descriptor for queues.
+'
+' Must be paired with the array that holds the queue data.
+'
+TYPE QueueDescriptor
+    ' The first element of the queue in the array
+    First AS INTEGER
+    ' The total number of elements in the queue
+    Count AS INTEGER
 END TYPE
 
 ' 80x25 text mode, but QuickBasic doesn't normally use the last row,
@@ -28,7 +52,8 @@ CONST NOTFOUND = -3
 DECLARE FUNCTION LoadDb% (Db() AS Program, Path AS STRING)
 
 ' finds a program
-DECLARE FUNCTION Find% (Db() AS Program, DbSize AS INTEGER, Query AS STRING)
+DECLARE SUB Find (Db() AS Program, DbSize AS INTEGER, Matches() AS QueueNode, _
+                  MatchesDesc As QueueDescriptor, Query AS STRING)
 
 ' prompts the user for input
 DECLARE FUNCTION Prompt% (Db() AS Program, DbSize AS INTEGER)
@@ -113,31 +138,77 @@ END SUB
 '
 ' @return INTEGER the program index in the database or a special index
 '
-FUNCTION Find% (Db() AS Program, DbSize AS INTEGER, Query AS STRING)
+SUB Find (Db() AS Program, DbSize AS INTEGER, Matches() AS QueueNode, _
+                MatchesDesc AS QueueDescriptor, Query AS STRING)
+    ' empty the queue
+    MatchesDesc.First = NOTFOUND
+    MatchesDesc.Count = 0
+
     ' don't attempt to find anything on an empty string
-    IF LEN(Query) THEN
-        Query = UCASE$(Query)
-        IF Query = LISTCMD OR INSTR(UCASE$(LISTDESC), Query) THEN
-            Find% = LISTIDX
-            EXIT FUNCTION
-        ELSEIF Query = EXITCMD OR INSTR(UCASE$(EXITDESC), Query) THEN
-            Find% = EXITIDX
-            EXIT FUNCTION
+    IF LEN(Query) = 0 THEN
+        EXIT SUB
+    END IF
+
+    Query = UCASE$(Query)
+
+    Priority% = INSTR(UCASE$(LISTDESC), Query)
+    IF Query = LISTCMD THEN
+        Push Matches(), MatchesDesc, LISTIDX, 0
+    ELSEIF Priority% <> 0 THEN
+        Push Matches(), MatchesDesc, LISTIDX, Priority%
+    ELSE
+        Priority% = INSTR(UCASE$(EXITDESC), Query)
+        IF Query = EXITCMD THEN
+            Push Matches(), MatchesDesc, EXITIDX, 0
+        ELSEIF Priority% <> 0 THEN
+            Push Matches(), MatchesDesc, EXITIDX, Priority%
         ELSE
             FOR I% = 0 TO DbSize - 1
-                ' TODO: it only finds the first right now
-                IF INSTR(UCASE$(Db(I%).Title), Query) THEN
-                    Find% = I%
-                    EXIT FUNCTION
-                ELSEIF RTRIM$(Db(I%).Basename) = Query THEN
-                    Find% = I%
-                    EXIT FUNCTION
+                Priority% = INSTR(UCASE$(Db(I%).Title), Query)
+                IF RTRIM$(Db(I%).Basename) = Query THEN
+                    Push Matches(), MatchesDesc, I%, 0
+                ELSEIF Priority% <> 0 THEN
+                    Push Matches(), MatchesDesc, I%, Priority%
                 END IF
             NEXT
         END IF
     END IF
-    Find% = NOTFOUND
-END FUNCTION
+END SUB
+
+SUB Push (Queue() AS QueueNode, QDesc AS QueueDescriptor, Value AS INTEGER, Priority AS INTEGER)
+    ' I am assuming MatchCount < UBOUND(Matches) always
+    IF QDesc.Count = 0 THEN
+        Queue(0).Value = Value
+        Queue(0).Priority = Priority
+        Queue(0).Successor = NOTFOUND
+        QDesc.First = 0
+        QDesc.Count = 1
+    ELSEIF Priority <= Queue(QDesc.First).Priority THEN
+        ' if there are Desc.Count elements in the queue, it is safe to overwrite the
+        ' Desc.Count node, because the array is 0-based
+        Queue(QDesc.Count).Value = Value
+        Queue(QDesc.Count).Priority = Priority
+        Queue(QDesc.Count).Successor = QDesc.First
+        QDesc.First = QDesc.Count
+        QDesc.Count = QDesc.Count + 1
+    ELSE
+        Current% = QDesc.First
+        Successor% = Queue(QDesc.First).Successor
+        DO WHILE Successor% <> NOTFOUND
+            IF Priority <= Queue(Successor%).Priority THEN
+                EXIT DO
+            END IF
+            Current% = Queue(Current%).Successor
+            ' it's using the updated Current%!
+            Successor% = Queue(Current%).Successor
+        LOOP
+        Queue(QDesc.Count).Value = Value
+        Queue(QDesc.Count).Priority = Priority
+        Queue(QDesc.Count).Successor = Successor%
+        Queue(Current%).Successor = QDesc.Count
+        QDesc.Count = QDesc.Count + 1
+    END IF
+END SUB
 
 '
 ' Loads program database from the batch files in the specified path
@@ -217,8 +288,12 @@ END FUNCTION
 ' @return INTEGER the program index
 '
 FUNCTION Prompt% (Db() AS Program, DbSize AS INTEGER)
-    DIM ProgIndex AS INTEGER
+    DIM Matches(DbSize) AS QueueNode
+    DIM MatchesDesc AS QueueDescriptor
     DIM Keystroke AS STRING
+
+    DbIndex% = NOTFOUND
+    QueryChanged% = FALSE
     Redraw% = FALSE
     Query$ = ""
 
@@ -237,13 +312,10 @@ FUNCTION Prompt% (Db() AS Program, DbSize AS INTEGER)
     ' begin listening for keypresses
     DO
         ' clear the buffer for residual key presses before SLEEPing
-        DO
-            Keystroke = INKEY$
-        LOOP UNTIL Keystroke = ""
+        WHILE INKEY$ <> "": WEND
 
         ' read from the keyboard buffer
-        SLEEP
-        Keystroke = INKEY$
+        SLEEP: Keystroke = INKEY$
 
         ' process the received keypress
         DEF SEG = VARSEG(Keystroke)
@@ -256,6 +328,7 @@ FUNCTION Prompt% (Db() AS Program, DbSize AS INTEGER)
                         Query$ = LEFT$(Query$, CurIndex% - 1) + _
                                 RIGHT$(Query$, LEN(Query$) - CurIndex%)
                         CurIndex% = CurIndex% - 1
+                        QueryChanged% = TRUE
                         Redraw% = TRUE
                     END IF
                 CASE IS > 31 ' printable characters
@@ -263,6 +336,7 @@ FUNCTION Prompt% (Db() AS Program, DbSize AS INTEGER)
                     Query$ = LEFT$(Query$, CurIndex%) + Keystroke + _
                             RIGHT$(Query$, LEN(Query$) - CurIndex%)
                     CurIndex% = CurIndex% + 1
+                    QueryChanged% = TRUE
                     Redraw% = TRUE
             END SELECT
         ELSE
@@ -289,19 +363,29 @@ FUNCTION Prompt% (Db() AS Program, DbSize AS INTEGER)
                     IF CurIndex% < LEN(Query$) THEN
                         Query$ = LEFT$(Query$, CurIndex%) + _
                                 RIGHT$(Query$, LEN(Query$) - CurIndex% - 1)
+                        QueryChanged% = TRUE
                         Redraw% = TRUE
                     END IF
             END SELECT
         END IF
         DEF SEG
 
-        ' update the program index with the current query
-        ProgIndex = Find%(Db(), DbSize, RTRIM$(LTRIM$(Query$)))
+        IF QueryChanged% THEN
+            ' update the matches queue with the current query
+            Find Db(), DbSize, Matches(), MatchesDesc, RTRIM$(LTRIM$(Query$))
 
-        ' redraw the line if it changed
+            ' reset the current db index
+            IF MatchesDesc.Count > 0 THEN
+                DbIndex% = Matches(MatchesDesc.First).Value
+            ELSE
+                DbIndex% = NOTFOUND
+            END IF
+        END IF
+
         IF Redraw% THEN
             Line$ = Arrow$ + Query$
-            SELECT CASE ProgIndex
+
+            SELECT CASE DbIndex%
                 CASE LISTIDX
                     Line$ = Line$ + "  (" + LISTDESC + ")"
                 CASE EXITIDX
@@ -309,10 +393,10 @@ FUNCTION Prompt% (Db() AS Program, DbSize AS INTEGER)
                 CASE IS <> NOTFOUND
                     ' the title is empty if it filled with \0
                     ' in this case, checking the first byte is enough
-                    IF ASC(Db(ProgIndex).Title) <> 0 THEN
-                        Line$ = Line$ + "  (" + RTRIM$(Db(ProgIndex).Title) + ")"
+                    IF ASC(Db(DbIndex%).Title) <> 0 THEN
+                        Line$ = Line$ + "  (" + RTRIM$(Db(DbIndex%).Title) + ")"
                     ELSE
-                        Line$ = Line$ + "  (Run " + RTRIM$(Db(ProgIndex).Basename) + ".BAT)"
+                        Line$ = Line$ + "  (Run " + RTRIM$(Db(DbIndex%).Basename) + ".BAT)"
                     END IF
             END SELECT
 
@@ -326,7 +410,7 @@ FUNCTION Prompt% (Db() AS Program, DbSize AS INTEGER)
             IF PromptRow% + RowsPrinted% > SCREENROWS THEN
                 PromptRow% = PromptRow% - 1
             END IF
-            Redraw% = FALSE
+            QueryChanged% = FALSE
         END IF
 
         ' calculate the cursor position based on the cursor index and relocate
@@ -338,9 +422,9 @@ FUNCTION Prompt% (Db() AS Program, DbSize AS INTEGER)
     ' the user expects a newline when they press enter
     PRINT
 
-    IF ProgIndex = NOTFOUND AND LEN(Query$) THEN
+    IF MatchesDesc.Count = 0 AND LEN(Query$) THEN
         PRINT "Illegal program: " + RTRIM$(LTRIM$(Query$)) + "."
     END IF
-    Prompt% = ProgIndex
+    Prompt% = DbIndex%
 END FUNCTION
 
