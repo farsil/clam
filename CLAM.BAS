@@ -9,13 +9,11 @@ TYPE Program
 END TYPE
 
 '
-' A node to be used with the priority queue.
+' A node to be used with the queue.
 '
 TYPE QueueNode
     ' The queue value
     Value AS INTEGER
-    ' The priority of the program
-    Priority AS INTEGER
     ' The previous node in the queue
     Predecessor AS INTEGER
     ' The next node in the queue
@@ -39,7 +37,7 @@ END TYPE
 CONST SCREENROWS = 24, SCREENCOLS = 80
 
 ' booleans
-CONST FALSE = 0, TRUE = 1
+CONST FALSE = 0, TRUE = NOT 0
 
 ' index, command and description of the LIST virtual program
 CONST LISTIDX = -1, LISTCMD = "L", LISTDESC = "List programs"
@@ -50,15 +48,27 @@ CONST EXITIDX = -2, EXITCMD = "X", EXITDESC = "Exit to DOS"
 ' no program is matched
 CONST NOTFOUND = -3
 
-' loads the program database
-DECLARE FUNCTION LoadDb% (Db() AS Program, Path AS STRING)
+' limit for QuickSort function, so that it never uses more than ~4K of RAM
+CONST SORTLIMIT = 1024
 
-' finds a program
-DECLARE SUB Find (Db() AS Program, DbSize AS INTEGER, Matches() AS QueueNode, _
-                  MatchesDesc As QueueDescriptor, Query AS STRING)
+' loads the program database
+DECLARE FUNCTION LoadDatabase% (Db() AS Program, Path AS STRING)
+
+' sorts the program database
+DECLARE SUB QuickSort (Db() AS Program, Size AS INTEGER, Limit AS INTEGER)
 
 ' prompts the user for input
 DECLARE FUNCTION Prompt% (Db() AS Program, DbSize AS INTEGER)
+
+' finds a program
+DECLARE SUB Find (Db() AS Program, DbSize AS INTEGER, Matches() AS QueueNode, _
+                  MatchesDesc AS QueueDescriptor, Query AS STRING)
+
+' adds an element before the first element of the queue
+DECLARE SUB AddFirst (Queue() AS QueueNode, QDesc AS QueueDescriptor, Value AS INTEGER)
+
+' adds an element after the last element of the queue
+DECLARE SUB AddLast (Queue() AS QueueNode, QDesc AS QueueDescriptor, Value AS INTEGER)
 
 ' executes a program
 DECLARE SUB Exec (Db() AS Program, DbSize AS INTEGER, _
@@ -70,151 +80,13 @@ Path$ = COMMAND$ + "\"
 ' REDIM is necessary because the final size may be different after
 ' invoking the loading function
 REDIM Db(63) AS Program
-DbSize% = LoadDb%(Db(), Path$)
+DbSize% = LoadDatabase%(Db(), Path$)
 
 PRINT
 DO:
     Index% = Prompt%(Db(), DbSize%)
     Exec Db(), DbSize%, Index%, Path$
 LOOP
-
-'
-' Executes the program in the database at the specified index.
-'
-' There are two virtual programs that are always possible to execute:
-'
-' * LIST, which lists the programs in the database.
-' * EXIT, which exits the program to DOS.
-'
-' They are invoked by suppliyng the special program indices LISTIDX (-1)
-' and EXITIDX (-2).
-'
-' Nothing is executed if NOTFOUND (-3) is passed as an index.
-'
-' This function does not attempt to calculate the database size using
-' UBOUND, but relies on the supplied program count.
-'
-' @param Db Program() the program database
-' @param DbSize INTEGER the number of programs in the database
-' @param Index INTEGER the index of the program to execute
-'
-SUB Exec (Db() AS Program, DbSize AS INTEGER, Index AS INTEGER, Path AS STRING)
-    SELECT CASE Index
-        CASE LISTIDX
-            FOR I% = 0 TO DbSize - 1
-                IF ASC(Db(I%).Title) <> 0 THEN
-                    PRINT RTRIM$(Db(I%).Title) + " [";
-                END IF
-                PRINT RTRIM$(Db(I%).Basename);
-                IF ASC(Db(I%).Title) <> 0 THEN
-                    PRINT "]";
-                END IF
-                PRINT
-            NEXT
-            PRINT "   " + STR$(DbSize) + " program(s)"
-        CASE EXITIDX
-            END
-        CASE IS <> NOTFOUND
-            ' COMMAND /c solves loading issues with certain games
-            SHELL "COMMAND /c " + Path + Db(Index).Basename + ".BAT"
-    END SELECT
-END SUB
-
-'
-' Finds a program in the database by attempting to match the specified query.
-'
-' There are two virtual programs that can be matched by supplying a
-' specific query:
-'
-' * LIST, matched by providing "list" or "l".
-' * EXIT, matched by providing "exit" or "x".
-'
-' This function returns the special indices LISTIDX (-1) and
-' EXITIDX (-2) respectively when the virtual programs are matched.
-'
-' Returns NOTFOUND (-3) when no match could be found.
-'
-' @param Db Program() the program database
-' @param DbSize INTEGER the number of programs in the database
-' @param Query STRING the query
-'
-' @return INTEGER the program index in the database or a special index
-'
-SUB Find (Db() AS Program, DbSize AS INTEGER, Matches() AS QueueNode, _
-                MatchesDesc AS QueueDescriptor, Query AS STRING)
-    ' empty the queue
-    MatchesDesc.Count = 0
-
-    ' don't attempt to find anything on an empty string
-    IF LEN(Query) = 0 THEN
-        EXIT SUB
-    END IF
-    Query = UCASE$(Query)
-
-    Priority% = INSTR(UCASE$(LISTDESC), Query)
-    IF Query = LISTCMD THEN
-        Push Matches(), MatchesDesc, LISTIDX, 0
-    ELSEIF Priority% <> 0 THEN
-        Push Matches(), MatchesDesc, LISTIDX, Priority%
-    END IF
-
-    Priority% = INSTR(UCASE$(EXITDESC), Query)
-    IF Query = EXITCMD THEN
-        Push Matches(), MatchesDesc, EXITIDX, 0
-    ELSEIF Priority% <> 0 THEN
-        Push Matches(), MatchesDesc, EXITIDX, Priority%
-    END IF
-
-    FOR I% = 0 TO DbSize - 1
-        Priority% = INSTR(UCASE$(Db(I%).Title), Query)
-        IF RTRIM$(Db(I%).Basename) = Query THEN
-            Push Matches(), MatchesDesc, I%, 0
-        ELSEIF Priority% <> 0 THEN
-            Push Matches(), MatchesDesc, I%, Priority%
-        END IF
-    NEXT
-END SUB
-
-SUB Push (Queue() AS QueueNode, QDesc AS QueueDescriptor, Value AS INTEGER, _
-          Priority AS INTEGER)
-    ' I am assuming MatchCount < UBOUND(Matches) always
-    IF QDesc.Count = 0 THEN
-        Queue(0).Value = Value
-        Queue(0).Priority = Priority
-        Queue(0).Predecessor = 0
-        Queue(0).Successor = 0
-        QDesc.First = 0
-        QDesc.Count = 1
-    ELSEIF Priority <= Queue(QDesc.First).Priority THEN
-        ' if there are Desc.Count elements in the queue, it is safe to
-        ' overwrite the Desc.Count node, because the array is 0-based
-        Last% = Queue(QDesc.First).Predecessor
-        Queue(QDesc.Count).Value = Value
-        Queue(QDesc.Count).Priority = Priority
-        Queue(QDesc.Count).Successor = QDesc.First
-        Queue(QDesc.Count).Predecessor = Last%
-        Queue(Last%).Successor = QDesc.Count
-        Queue(QDesc.First).Predecessor = QDesc.Count
-        QDesc.First = QDesc.Count
-        QDesc.Count = QDesc.Count + 1
-    ELSE
-        Successor% = Queue(QDesc.First).Successor
-        DO WHILE Successor% <> QDesc.First
-            IF Priority <= Queue(Successor%).Priority THEN
-                EXIT DO
-            END IF
-            Successor% = Queue(Successor%).Successor
-        LOOP
-        Current% = Queue(Successor%).Predecessor
-        Queue(QDesc.Count).Value = Value
-        Queue(QDesc.Count).Priority = Priority
-        Queue(QDesc.Count).Successor = Successor%
-        Queue(QDesc.Count).Predecessor = Current%
-        Queue(Successor%).Predecessor = QDesc.Count
-        Queue(Current%).Successor = QDesc.Count
-        QDesc.Count = QDesc.Count + 1
-    END IF
-END SUB
 
 '
 ' Loads program database from the batch files in the specified path
@@ -230,8 +102,8 @@ END SUB
 '
 ' @return INTEGER the number of entries in the program database
 '
-FUNCTION LoadDb% (Db() AS Program, Path AS STRING)
-    DbSize% = UBOUND(Db) - LBOUND(Db) + 1
+FUNCTION LoadDatabase% (Db() AS Program, Path AS STRING)
+    DbMaxSize% = UBOUND(Db) - LBOUND(Db) + 1
     Index% = LBOUND(Db)
     Line$ = ""
 
@@ -242,16 +114,16 @@ FUNCTION LoadDb% (Db() AS Program, Path AS STRING)
     OPEN "CLAM.TMP" FOR INPUT AS #TmpFile
     DO WHILE NOT EOF(TmpFile)
         ' REDIM if database is too small
-        IF Index% = DbSize% THEN
-            DIM Aux(DbSize% - 1) AS Program
-            FOR I% = 0 TO DbSize% - 1
+        IF Index% = DbMaxSize% THEN
+            DIM Aux(DbMaxSize% - 1) AS Program
+            FOR I% = 0 TO DbMaxSize% - 1
                 Aux(I%) = Db(I%)
             NEXT
-            REDIM Db(DbSize% + 64) AS Program
-            FOR I% = 0 TO DbSize% - 1
+            REDIM Db(DbMaxSize% + 64) AS Program
+            FOR I% = 0 TO DbMaxSize% - 1
                 Db(I%) = Aux(I%)
             NEXT
-            DbSize% = DbSize% + 64
+            DbMaxSize% = DbMaxSize% + 64
         END IF
 
         ' reads filename from the shell output read from the temporary file
@@ -273,9 +145,63 @@ FUNCTION LoadDb% (Db() AS Program, Path AS STRING)
         Index% = Index% + 1
     LOOP
     CLOSE #TmpFile
+
+    ' sort the database
+    QuickSort Db(), Index%, SORTLIMIT
+
     ' Index% is the number of files
-    LoadDb% = Index%
+    LoadDatabase% = Index%
 END FUNCTION
+
+SUB QuickSort (Db() AS Program, Size AS INTEGER, Limit AS INTEGER)
+    ' non-recursive implementation by Darel Rex Finley
+    ' http://alienryderflex.com/quicksort/
+    DIM Low(Limit) AS INTEGER
+    DIM High(Limit) AS INTEGER
+    DIM Left AS INTEGER
+    DIM Right AS INTEGER
+    DIM Pivot AS Program
+
+    Low(0) = 0
+    High(0) = Size
+    I% = 0
+
+    WHILE I% >= 0
+        Left = Low(I%)
+        Right = High(I%) - 1
+        IF Left < Right THEN
+            Pivot = Db(Left)
+            IF I% = Limit THEN
+                PRINT "Out of space, returning a potentially unsorted ";  _
+                      "program list"
+                EXIT SUB
+            END IF
+            WHILE Left < Right
+                WHILE Db(Right).Title >= Pivot.Title AND Left < Right
+                    Right = Right - 1
+                WEND
+                IF Left < Right THEN
+                    Db(Left) = Db(Right)
+                    Left = Left + 1
+                END IF
+                WHILE Db(Left).Title <= Pivot.Title AND Left < Right
+                    Left = Left + 1
+                WEND
+                IF Left < Right THEN
+                    Db(Right) = Db(Left)
+                    Right = Right - 1
+                END IF
+            WEND
+            Db(Left) = Pivot
+            Low(I% + 1) = Left + 1
+            High(I% + 1) = High(I%)
+            High(I%) = Left
+            I% = I% + 1
+        ELSE
+            I% = I% - 1
+        END IF
+    WEND
+END SUB
 
 '
 ' Prompts the user for the program to execute.
@@ -454,4 +380,124 @@ FUNCTION Prompt% (Db() AS Program, DbSize AS INTEGER)
         Prompt% = NOTFOUND
     END IF
 END FUNCTION
+
+'
+' Finds a program in the database by attempting to match the specified query.
+'
+' There are two virtual programs that can be matched by supplying a
+' specific query:
+'
+' * LIST, matched by providing "list" or "l".
+' * EXIT, matched by providing "exit" or "x".
+'
+' This function returns the special indices LISTIDX (-1) and
+' EXITIDX (-2) respectively when the virtual programs are matched.
+'
+' Returns NOTFOUND (-3) when no match could be found.
+'
+' @param Db Program() the program database
+' @param DbSize INTEGER the number of programs in the database
+' @param Query STRING the query
+'
+' @return INTEGER the program index in the database or a special index
+'
+SUB Find (Db() AS Program, DbSize AS INTEGER, Matches() AS QueueNode, _
+                MatchesDesc AS QueueDescriptor, Query AS STRING)
+    ' empty the queue
+    MatchesDesc.Count = 0
+
+    ' don't attempt to find anything on an empty string
+    IF LEN(Query) = 0 THEN
+        EXIT SUB
+    END IF
+    Query = UCASE$(Query)
+
+    FOR I% = 0 TO DbSize - 1
+        IF RTRIM$(Db(I%).Basename) = Query THEN
+            AddFirst Matches(), MatchesDesc, I%
+        ELSEIF INSTR(UCASE$(Db(I%).Title), Query) THEN
+            AddLast Matches(), MatchesDesc, I%
+        END IF
+    NEXT
+
+    IF Query = LISTCMD THEN
+        AddFirst Matches(), MatchesDesc, LISTIDX
+    ELSEIF INSTR(UCASE$(LISTDESC), Query) THEN
+        AddLast Matches(), MatchesDesc, LISTIDX
+    END IF
+
+    IF Query = EXITCMD THEN
+        AddFirst Matches(), MatchesDesc, EXITIDX
+    ELSEIF INSTR(UCASE$(EXITDESC), Query) THEN
+        AddLast Matches(), MatchesDesc, EXITIDX
+    END IF
+END SUB
+
+SUB AddFirst (Queue() AS QueueNode, QDesc AS QueueDescriptor, Value AS INTEGER)
+    AddLast Queue(), QDesc, Value
+    ' this only works due to the way AddLast functions!
+    QDesc.First = QDesc.Count - 1
+END SUB
+
+SUB AddLast (Queue() AS QueueNode, QDesc AS QueueDescriptor, Value AS INTEGER)
+    IF QDesc.Count = 0 THEN
+        Queue(0).Value = Value
+        Queue(0).Predecessor = 0
+        Queue(0).Successor = 0
+        QDesc.First = 0
+        QDesc.Count = 1
+    ELSE
+        ' if there are Desc.Count elements in the queue, it is safe to
+        ' overwrite the Desc.Count node, because the array is 0-based
+        Last% = Queue(QDesc.First).Predecessor
+        Queue(QDesc.Count).Value = Value
+        Queue(QDesc.Count).Successor = QDesc.First
+        Queue(QDesc.Count).Predecessor = Last%
+        Queue(Last%).Successor = QDesc.Count
+        Queue(QDesc.First).Predecessor = QDesc.Count
+        QDesc.Count = QDesc.Count + 1
+    END IF
+END SUB
+
+'
+' Executes the program in the database at the specified index.
+'
+' There are two virtual programs that are always possible to execute:
+'
+' * LIST, which lists the programs in the database.
+' * EXIT, which exits the program to DOS.
+'
+' They are invoked by suppliyng the special program indices LISTIDX (-1)
+' and EXITIDX (-2).
+'
+' Nothing is executed if NOTFOUND (-3) is passed as an index.
+'
+' This function does not attempt to calculate the database size using
+' UBOUND, but relies on the supplied program count.
+'
+' @param Db Program() the program database
+' @param DbSize INTEGER the number of programs in the database
+' @param Index INTEGER the index of the program to execute
+'
+SUB Exec (Db() AS Program, DbSize AS INTEGER, Index AS INTEGER, Path AS STRING)
+    SELECT CASE Index
+        CASE LISTIDX
+            FOR I% = 0 TO DbSize - 1
+                IF ASC(Db(I%).Title) <> 0 THEN
+                    PRINT RTRIM$(Db(I%).Title) + " [";
+                END IF
+                PRINT RTRIM$(Db(I%).Basename);
+                IF ASC(Db(I%).Title) <> 0 THEN
+                    PRINT "]";
+                END IF
+                PRINT
+            NEXT
+            PRINT "   " + STR$(DbSize) + " program(s)"
+        CASE EXITIDX
+            END
+        CASE IS <> NOTFOUND
+            ' COMMAND /c solves loading issues with certain games
+            SHELL "CALL " + Path + Db(Index).Basename + ".BAT"
+    END SELECT
+END SUB
 
