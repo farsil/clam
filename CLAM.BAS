@@ -16,6 +16,8 @@ TYPE QueueNode
     Value AS INTEGER
     ' The priority of the program
     Priority AS INTEGER
+    ' The previous node in the queue
+    Predecessor AS INTEGER
     ' The next node in the queue
     Successor AS INTEGER
 END TYPE
@@ -141,14 +143,12 @@ END SUB
 SUB Find (Db() AS Program, DbSize AS INTEGER, Matches() AS QueueNode, _
                 MatchesDesc AS QueueDescriptor, Query AS STRING)
     ' empty the queue
-    MatchesDesc.First = NOTFOUND
     MatchesDesc.Count = 0
 
     ' don't attempt to find anything on an empty string
     IF LEN(Query) = 0 THEN
         EXIT SUB
     END IF
-
     Query = UCASE$(Query)
 
     Priority% = INSTR(UCASE$(LISTDESC), Query)
@@ -156,55 +156,61 @@ SUB Find (Db() AS Program, DbSize AS INTEGER, Matches() AS QueueNode, _
         Push Matches(), MatchesDesc, LISTIDX, 0
     ELSEIF Priority% <> 0 THEN
         Push Matches(), MatchesDesc, LISTIDX, Priority%
-    ELSE
-        Priority% = INSTR(UCASE$(EXITDESC), Query)
-        IF Query = EXITCMD THEN
-            Push Matches(), MatchesDesc, EXITIDX, 0
-        ELSEIF Priority% <> 0 THEN
-            Push Matches(), MatchesDesc, EXITIDX, Priority%
-        ELSE
-            FOR I% = 0 TO DbSize - 1
-                Priority% = INSTR(UCASE$(Db(I%).Title), Query)
-                IF RTRIM$(Db(I%).Basename) = Query THEN
-                    Push Matches(), MatchesDesc, I%, 0
-                ELSEIF Priority% <> 0 THEN
-                    Push Matches(), MatchesDesc, I%, Priority%
-                END IF
-            NEXT
-        END IF
     END IF
+
+    Priority% = INSTR(UCASE$(EXITDESC), Query)
+    IF Query = EXITCMD THEN
+        Push Matches(), MatchesDesc, EXITIDX, 0
+    ELSEIF Priority% <> 0 THEN
+        Push Matches(), MatchesDesc, EXITIDX, Priority%
+    END IF
+
+    FOR I% = 0 TO DbSize - 1
+        Priority% = INSTR(UCASE$(Db(I%).Title), Query)
+        IF RTRIM$(Db(I%).Basename) = Query THEN
+            Push Matches(), MatchesDesc, I%, 0
+        ELSEIF Priority% <> 0 THEN
+            Push Matches(), MatchesDesc, I%, Priority%
+        END IF
+    NEXT
 END SUB
 
-SUB Push (Queue() AS QueueNode, QDesc AS QueueDescriptor, Value AS INTEGER, Priority AS INTEGER)
+SUB Push (Queue() AS QueueNode, QDesc AS QueueDescriptor, Value AS INTEGER, _
+          Priority AS INTEGER)
     ' I am assuming MatchCount < UBOUND(Matches) always
     IF QDesc.Count = 0 THEN
         Queue(0).Value = Value
         Queue(0).Priority = Priority
-        Queue(0).Successor = NOTFOUND
+        Queue(0).Predecessor = 0
+        Queue(0).Successor = 0
         QDesc.First = 0
         QDesc.Count = 1
     ELSEIF Priority <= Queue(QDesc.First).Priority THEN
-        ' if there are Desc.Count elements in the queue, it is safe to overwrite the
-        ' Desc.Count node, because the array is 0-based
+        ' if there are Desc.Count elements in the queue, it is safe to
+        ' overwrite the Desc.Count node, because the array is 0-based
+        Last% = Queue(QDesc.First).Predecessor
         Queue(QDesc.Count).Value = Value
         Queue(QDesc.Count).Priority = Priority
         Queue(QDesc.Count).Successor = QDesc.First
+        Queue(QDesc.Count).Predecessor = Last%
+        Queue(Last%).Successor = QDesc.Count
+        Queue(QDesc.First).Predecessor = QDesc.Count
         QDesc.First = QDesc.Count
         QDesc.Count = QDesc.Count + 1
     ELSE
-        Current% = QDesc.First
         Successor% = Queue(QDesc.First).Successor
-        DO WHILE Successor% <> NOTFOUND
+        DO WHILE Successor% <> QDesc.First
             IF Priority <= Queue(Successor%).Priority THEN
                 EXIT DO
             END IF
-            Current% = Queue(Current%).Successor
-            ' it's using the updated Current%!
-            Successor% = Queue(Current%).Successor
+            Successor% = Queue(Successor%).Successor
         LOOP
+        Current% = Queue(Successor%).Predecessor
         Queue(QDesc.Count).Value = Value
         Queue(QDesc.Count).Priority = Priority
         Queue(QDesc.Count).Successor = Successor%
+        Queue(QDesc.Count).Predecessor = Current%
+        Queue(Successor%).Predecessor = QDesc.Count
         Queue(Current%).Successor = QDesc.Count
         QDesc.Count = QDesc.Count + 1
     END IF
@@ -290,12 +296,13 @@ END FUNCTION
 FUNCTION Prompt% (Db() AS Program, DbSize AS INTEGER)
     DIM Matches(DbSize) AS QueueNode
     DIM MatchesDesc AS QueueDescriptor
+    DIM MatchesIndex AS INTEGER
     DIM Keystroke AS STRING
 
-    DbIndex% = NOTFOUND
-    QueryChanged% = FALSE
+    MatchesDesc.Count = 0
     Redraw% = FALSE
     Query$ = ""
+    QueryChanged% = FALSE
 
     ' -> arrow prompt
     Arrow$ = CHR$(26) + " "
@@ -331,6 +338,11 @@ FUNCTION Prompt% (Db() AS Program, DbSize AS INTEGER)
                         QueryChanged% = TRUE
                         Redraw% = TRUE
                     END IF
+                CASE 9 ' tab
+                    IF MatchesDesc.Count > 0 THEN
+                        MatchesIndex = Matches(MatchesIndex).Successor
+                        Redraw% = TRUE
+                    END IF
                 CASE IS > 31 ' printable characters
                     ' insert a character and move the cursor forward
                     Query$ = LEFT$(Query$, CurIndex%) + Keystroke + _
@@ -345,6 +357,11 @@ FUNCTION Prompt% (Db() AS Program, DbSize AS INTEGER)
                 CASE 71 ' home
                     ' move the cursor to the beginning
                     CurIndex% = 0
+                CASE 72 ' up arrow
+                    IF MatchesDesc.Count > 0 THEN
+                        MatchesIndex = Matches(MatchesIndex).Predecessor
+                        Redraw% = TRUE
+                    END IF
                 CASE 75 ' left arrow
                     ' move the cursor backwards
                     IF CurIndex% > 0 THEN
@@ -358,6 +375,11 @@ FUNCTION Prompt% (Db() AS Program, DbSize AS INTEGER)
                 CASE 79 ' end
                     ' move the cursor to the end
                     CurIndex% = LEN(Query$)
+                CASE 80 'down arrow
+                    IF MatchesDesc.Count > 0 THEN
+                        MatchesIndex = Matches(MatchesIndex).Successor
+                        Redraw% = TRUE
+                    END IF
                 CASE 83 ' delete
                     ' delete a charcater
                     IF CurIndex% < LEN(Query$) THEN
@@ -374,31 +396,32 @@ FUNCTION Prompt% (Db() AS Program, DbSize AS INTEGER)
             ' update the matches queue with the current query
             Find Db(), DbSize, Matches(), MatchesDesc, RTRIM$(LTRIM$(Query$))
 
-            ' reset the current db index
-            IF MatchesDesc.Count > 0 THEN
-                DbIndex% = Matches(MatchesDesc.First).Value
-            ELSE
-                DbIndex% = NOTFOUND
-            END IF
+            ' reset the current matches index, it may be an invalid value, so
+            ' it must be guarded with a MatchesDesc.Count check
+            MatchesIndex = MatchesDesc.First
         END IF
 
         IF Redraw% THEN
             Line$ = Arrow$ + Query$
-
-            SELECT CASE DbIndex%
-                CASE LISTIDX
-                    Line$ = Line$ + "  (" + LISTDESC + ")"
-                CASE EXITIDX
-                    Line$ = Line$ + "  (" + EXITDESC + ")"
-                CASE IS <> NOTFOUND
-                    ' the title is empty if it filled with \0
-                    ' in this case, checking the first byte is enough
-                    IF ASC(Db(DbIndex%).Title) <> 0 THEN
-                        Line$ = Line$ + "  (" + RTRIM$(Db(DbIndex%).Title) + ")"
-                    ELSE
-                        Line$ = Line$ + "  (Run " + RTRIM$(Db(DbIndex%).Basename) + ".BAT)"
-                    END IF
-            END SELECT
+            IF MatchesDesc.Count > 0 THEN
+                DbIndex% = Matches(MatchesIndex).Value
+                SELECT CASE DbIndex%
+                    CASE LISTIDX
+                        Line$ = Line$ + "  (" + LISTDESC + ")"
+                    CASE EXITIDX
+                        Line$ = Line$ + "  (" + EXITDESC + ")"
+                    CASE IS <> NOTFOUND
+                        ' the title is empty if it filled with \0
+                        ' in this case, checking the first byte is enough
+                        IF ASC(Db(DbIndex%).Title) <> 0 THEN
+                            Line$ = Line$ + "  (" + _
+                                    RTRIM$(Db(DbIndex%).Title) + ")"
+                        ELSE
+                            Line$ = Line$ + "  (Run " + _
+                                    RTRIM$(Db(DbIndex%).Basename) + ".BAT)"
+                        END IF
+                END SELECT
+            END IF
 
             ' reset the cursor and print the line, adding enough right
             ' padding to clear the row
@@ -422,9 +445,13 @@ FUNCTION Prompt% (Db() AS Program, DbSize AS INTEGER)
     ' the user expects a newline when they press enter
     PRINT
 
-    IF MatchesDesc.Count = 0 AND LEN(Query$) THEN
-        PRINT "Illegal program: " + RTRIM$(LTRIM$(Query$)) + "."
+    IF MatchesDesc.Count <> 0 THEN
+        Prompt% = Matches(MatchesIndex).Value
+    ELSE
+        IF LEN(Query$) THEN
+            PRINT "Illegal program: " + RTRIM$(LTRIM$(Query$)) + "."
+        END IF
+        Prompt% = NOTFOUND
     END IF
-    Prompt% = DbIndex%
 END FUNCTION
 
