@@ -1,3 +1,7 @@
+' the functions and subroutines all assume that
+' arrays start at index 0 for simplicity
+OPTION BASE 0
+
 '
 ' A program that can be executed.
 '
@@ -39,14 +43,14 @@ CONST SCREENROWS = 24, SCREENCOLS = 80
 ' booleans
 CONST FALSE = 0, TRUE = NOT 0
 
-' index, command and description of the LIST virtual program
-CONST LISTIDX = -1, LISTCMD = "L", LISTDESC = "List programs"
+' command that launches the LIST virtual program
+CONST LISTCMD = "L"
 
-' index, command and description of the EXIT virtual program
-CONST EXITIDX = -2, EXITCMD = "X", EXITDESC = "Exit to DOS"
+' command that launches the EXIT virtual program
+CONST EXITCMD = "X"
 
 ' no program is matched
-CONST NOTFOUND = -3
+CONST NOTFOUND = -1
 
 ' limit for QuickSort function, so that it never uses more than ~4K of RAM
 CONST SORTLIMIT = 1024
@@ -103,9 +107,18 @@ LOOP
 ' @return INTEGER the number of entries in the program database
 '
 FUNCTION LoadDatabase% (Db() AS Program, Path AS STRING)
-    DbMaxSize% = UBOUND(Db) - LBOUND(Db) + 1
-    Index% = LBOUND(Db)
+    DbMaxSize% = UBOUND(Db) + 1
+    Index% = 0
     Line$ = ""
+
+    ' register the two virtual programs in the database
+    ' this assumes that Db() can hold at least 2 elements
+    Db(Index%).Basename = LISTCMD
+    Db(Index%).Title = "List programs"
+    Index% = Index% + 1
+    Db(Index%).Basename = EXITCMD
+    Db(Index%).Title = "Exit to DOS"
+    Index% = Index% + 1
 
     ' saves the list of batch files to a temporary file
     SHELL "DIR /b " + Path + "*.BAT > CLAM.TMP"
@@ -331,22 +344,17 @@ FUNCTION Prompt% (Db() AS Program, DbSize AS INTEGER)
             Line$ = Arrow$ + Query$
             IF MatchesDesc.Count > 0 THEN
                 DbIndex% = Matches(MatchesIndex).Value
-                SELECT CASE DbIndex%
-                    CASE LISTIDX
-                        Line$ = Line$ + "  (" + LISTDESC + ")"
-                    CASE EXITIDX
-                        Line$ = Line$ + "  (" + EXITDESC + ")"
-                    CASE IS <> NOTFOUND
-                        ' the title is empty if it filled with \0
-                        ' in this case, checking the first byte is enough
-                        IF ASC(Db(DbIndex%).Title) <> 0 THEN
-                            Line$ = Line$ + "  (" + _
-                                    RTRIM$(Db(DbIndex%).Title) + ")"
-                        ELSE
-                            Line$ = Line$ + "  (Run " + _
-                                    RTRIM$(Db(DbIndex%).Basename) + ".BAT)"
-                        END IF
-                END SELECT
+                IF DbIndex% <> NOTFOUND THEN
+                    ' the title is empty if it filled with \0
+                    ' in this case, checking the first byte is enough
+                    IF ASC(Db(DbIndex%).Title) <> 0 THEN
+                        Line$ = Line$ + "  (" + _
+                                RTRIM$(Db(DbIndex%).Title) + ")"
+                    ELSE
+                        Line$ = Line$ + "  (Run " + _
+                                RTRIM$(Db(DbIndex%).Basename) + ".BAT)"
+                    END IF
+                END IF
             END IF
 
             ' reset the cursor and print the line, adding enough right
@@ -366,7 +374,7 @@ FUNCTION Prompt% (Db() AS Program, DbSize AS INTEGER)
         CurRow% = PromptRow% + INT((PromptLen% + CurIndex%) / SCREENCOLS)
         CurCol% = 1 + (PromptLen% + CurIndex%) MOD SCREENCOLS
         LOCATE CurRow%, CurCol%
-    LOOP UNTIL Keystroke = CHR$(13)
+    LOOP UNTIL Keystroke = CHR$(13) ' enter
 
     ' the user expects a newline when they press enter
     PRINT
@@ -419,18 +427,6 @@ SUB Find (Db() AS Program, DbSize AS INTEGER, Matches() AS QueueNode, _
             AddLast Matches(), MatchesDesc, I%
         END IF
     NEXT
-
-    IF Query = LISTCMD THEN
-        AddFirst Matches(), MatchesDesc, LISTIDX
-    ELSEIF INSTR(UCASE$(LISTDESC), Query) THEN
-        AddLast Matches(), MatchesDesc, LISTIDX
-    END IF
-
-    IF Query = EXITCMD THEN
-        AddFirst Matches(), MatchesDesc, EXITIDX
-    ELSEIF INSTR(UCASE$(EXITDESC), Query) THEN
-        AddLast Matches(), MatchesDesc, EXITIDX
-    END IF
 END SUB
 
 SUB AddFirst (Queue() AS QueueNode, QDesc AS QueueDescriptor, Value AS INTEGER)
@@ -480,8 +476,13 @@ END SUB
 ' @param Index INTEGER the index of the program to execute
 '
 SUB Exec (Db() AS Program, DbSize AS INTEGER, Index AS INTEGER, Path AS STRING)
-    SELECT CASE Index
-        CASE LISTIDX
+    IF Index = NOTFOUND THEN
+        EXIT SUB
+    END IF
+
+    Cmd$ = RTRIM$(Db(Index).Basename)
+    SELECT CASE Cmd$
+        CASE LISTCMD
             LOCATE , , 0
             FOR I% = 0 TO DbSize - 1
                 ' prints the program information
@@ -493,7 +494,8 @@ SUB Exec (Db() AS Program, DbSize AS INTEGER, Index AS INTEGER, Path AS STRING)
                     PRINT "]";
                 END IF
 
-                ' clears row, it can be dirty from the "Press any key" prompt
+                ' clears the rest of the row, it can be dirty from the
+                ' "Press any key" prompt
                 PRINT SPACE$(80 - POS(0))
 
                 ' each 22 rows, asks the user for a keypress
@@ -505,13 +507,12 @@ SUB Exec (Db() AS Program, DbSize AS INTEGER, Index AS INTEGER, Path AS STRING)
                     LOCATE CSRLIN - 1, 1
                 END IF
             NEXT
-            PRINT "   " + STR$(DbSize) + " program(s)"
+            PRINT "   "; DbSize; " program(s)"
             LOCATE , , 1
-        CASE EXITIDX
+        CASE EXITCMD
             END
-        CASE IS <> NOTFOUND
-            ' COMMAND /c solves loading issues with certain games
-            SHELL "CALL " + Path + Db(Index).Basename + ".BAT"
+        CASE ELSE
+            SHELL "CALL " + Path + Cmd$ + ".BAT"
     END SELECT
 END SUB
 
