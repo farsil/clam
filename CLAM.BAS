@@ -482,7 +482,9 @@ END SUB
 SUB Exec (Db() AS Program, DbSize AS INTEGER, Index AS INTEGER, Path AS STRING)
     SELECT CASE Index
         CASE LISTIDX
+            LOCATE , , 0
             FOR I% = 0 TO DbSize - 1
+                ' prints the program information
                 IF ASC(Db(I%).Title) <> 0 THEN
                     PRINT RTRIM$(Db(I%).Title) + " [";
                 END IF
@@ -490,9 +492,21 @@ SUB Exec (Db() AS Program, DbSize AS INTEGER, Index AS INTEGER, Path AS STRING)
                 IF ASC(Db(I%).Title) <> 0 THEN
                     PRINT "]";
                 END IF
-                PRINT
+
+                ' clears row, it can be dirty from the "Press any key" prompt
+                PRINT SPACE$(80 - POS(0))
+
+                ' each 22 rows, asks the user for a keypress
+                IF (I% + 1) MOD 22 = 0 THEN
+                    PRINT
+                    PRINT "Press any key to continue ...";
+                    SLEEP
+                    Unused$ = INKEY$
+                    LOCATE CSRLIN - 1, 1
+                END IF
             NEXT
             PRINT "   " + STR$(DbSize) + " program(s)"
+            LOCATE , , 1
         CASE EXITIDX
             END
         CASE IS <> NOTFOUND
