@@ -44,10 +44,10 @@ CONST SCREENROWS = 24, SCREENCOLS = 80
 CONST FALSE = 0, TRUE = NOT 0
 
 ' command that launches the LIST virtual program
-CONST LISTCMD = "L"
+CONST LISTCMD = "?"
 
 ' command that launches the EXIT virtual program
-CONST EXITCMD = "X"
+CONST EXITCMD = "."
 
 ' no program is matched
 CONST NOTFOUND = -1
