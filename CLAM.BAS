@@ -6,33 +6,34 @@ OPTION BASE 0
 ' A program that can be executed.
 '
 TYPE Program
-    ' The program filename without extension
-    Basename AS STRING * 8
-    ' The program title
+    ' The command used to launch and identify the program.
+    ' For non-virtual programs, it corresponds to the batch file basename.
+    Command AS STRING * 8
+    ' The program title.
     Title AS STRING * 32
 END TYPE
 
 '
-' A node to be used with the queue.
+' A double-ended queue node that stores an INTEGER value.
 '
-TYPE QueueNode
-    ' The queue value
+TYPE DequeNode
+    ' The node value.
     Value AS INTEGER
-    ' The previous node in the queue
+    ' The previous node in the queue.
     Predecessor AS INTEGER
-    ' The next node in the queue
+    ' The next node in the queue.
     Successor AS INTEGER
 END TYPE
 
 '
-' A descriptor for queues.
+' A descriptor for double-ended queues.
 '
 ' Must be paired with the array that holds the queue data.
 '
-TYPE QueueDescriptor
-    ' The first element of the queue in the array
+TYPE DequeDescriptor
+    ' The index of first element of the queue in the array.
     First AS INTEGER
-    ' The total number of elements in the queue
+    ' The total number of elements in the queue.
     Count AS INTEGER
 END TYPE
 
@@ -43,13 +44,11 @@ CONST SCREENROWS = 24, SCREENCOLS = 80
 ' booleans
 CONST FALSE = 0, TRUE = NOT 0
 
-' command that launches the LIST virtual program
-CONST LISTCMD = "?"
+' commands that identify the LIST and EXIT virtual programs
+' they have invalid DOS names so that they cannot conflict with real files
+CONST LISTCMD = "?", EXITCMD = "."
 
-' command that launches the EXIT virtual program
-CONST EXITCMD = "."
-
-' no program is matched
+' no match
 CONST NOTFOUND = -1
 
 ' limit for QuickSort function, so that it never uses more than ~4K of RAM
@@ -64,15 +63,15 @@ DECLARE SUB QuickSort (Db() AS Program, Size AS INTEGER, Limit AS INTEGER)
 ' prompts the user for input
 DECLARE FUNCTION Prompt% (Db() AS Program, DbSize AS INTEGER)
 
-' finds a program
-DECLARE SUB Find (Db() AS Program, DbSize AS INTEGER, Matches() AS QueueNode, _
-                  MatchesDesc AS QueueDescriptor, Query AS STRING)
+' finds programs in the database
+DECLARE SUB Find (Db() AS Program, DbSize AS INTEGER, Matches() AS DequeNode, _
+                  MatchesDesc AS DequeDescriptor, Query AS STRING)
 
 ' adds an element before the first element of the queue
-DECLARE SUB AddFirst (Queue() AS QueueNode, QDesc AS QueueDescriptor, Value AS INTEGER)
+DECLARE SUB AddFirst (Queue() AS DequeNode, QDesc AS DequeDescriptor, Value AS INTEGER)
 
 ' adds an element after the last element of the queue
-DECLARE SUB AddLast (Queue() AS QueueNode, QDesc AS QueueDescriptor, Value AS INTEGER)
+DECLARE SUB AddLast (Queue() AS DequeNode, QDesc AS DequeDescriptor, Value AS INTEGER)
 
 ' executes a program
 DECLARE SUB Exec (Db() AS Program, DbSize AS INTEGER, _
@@ -101,6 +100,9 @@ LOOP
 ' a special comment in the first line, which starts with three colons :::.
 ' If such comment is found, it is read and it will be the program title.
 '
+' This function also adds the two virtual programs LIST and EXIT to the
+' database.
+'
 ' @param Db Program() the array which will contain the program database
 ' @param Path STRING the path where to look for batch files
 '
@@ -113,10 +115,10 @@ FUNCTION LoadDatabase% (Db() AS Program, Path AS STRING)
 
     ' register the two virtual programs in the database
     ' this assumes that Db() can hold at least 2 elements
-    Db(Index%).Basename = LISTCMD
+    Db(Index%).Command = LISTCMD
     Db(Index%).Title = "List programs"
     Index% = Index% + 1
-    Db(Index%).Basename = EXITCMD
+    Db(Index%).Command = EXITCMD
     Db(Index%).Title = "Exit to DOS"
     Index% = Index% + 1
 
@@ -141,7 +143,7 @@ FUNCTION LoadDatabase% (Db() AS Program, Path AS STRING)
 
         ' reads filename from the shell output read from the temporary file
         LINE INPUT #TmpFile, Line$
-        Db(Index%).Basename = LEFT$(Line$, LEN(Line$) - 4)
+        Db(Index%).Command = LEFT$(Line$, LEN(Line$) - 4)
 
         ' reads description from first line in batch file
         ' line$ still holds the filename + extension when the file is opened
@@ -166,6 +168,15 @@ FUNCTION LoadDatabase% (Db() AS Program, Path AS STRING)
     LoadDatabase% = Index%
 END FUNCTION
 
+' Sorts the program database.
+'
+' The sorting is performed by program title. If provided memory limit
+' is not enough, this subroutine may not able to completely sort the database.
+'
+' @param Db Program() the program database
+' @param DbSize INTEGER the number of programs in the database
+' @param Limit INTEGER regulates the amount of memory this function uses
+'
 SUB QuickSort (Db() AS Program, Size AS INTEGER, Limit AS INTEGER)
     ' non-recursive implementation by Darel Rex Finley
     ' http://alienryderflex.com/quicksort/
@@ -223,9 +234,7 @@ END SUB
 ' by querying what the user types against the database while typing.
 '
 ' When the user presses ENTER, the query stops, and the index of the matched
-' program is returned, or NOTFOUND (-3) if no programs could be matched.
-' See the FIND() function documentation for more details on the possible
-' return values.
+' program is returned, or NOTFOUND (-1) if no programs could be matched.
 '
 ' @param Db Program() the program database
 ' @param DbSize INTEGER the number of programs in the database
@@ -233,8 +242,8 @@ END SUB
 ' @return INTEGER the program index
 '
 FUNCTION Prompt% (Db() AS Program, DbSize AS INTEGER)
-    DIM Matches(DbSize) AS QueueNode
-    DIM MatchesDesc AS QueueDescriptor
+    DIM Matches(DbSize) AS DequeNode
+    DIM MatchesDesc AS DequeDescriptor
     DIM MatchesIndex AS INTEGER
     DIM Keystroke AS STRING
 
@@ -352,7 +361,7 @@ FUNCTION Prompt% (Db() AS Program, DbSize AS INTEGER)
                                 RTRIM$(Db(DbIndex%).Title) + ")"
                     ELSE
                         Line$ = Line$ + "  (Run " + _
-                                RTRIM$(Db(DbIndex%).Basename) + ".BAT)"
+                                RTRIM$(Db(DbIndex%).Command) + ".BAT)"
                     END IF
                 END IF
             END IF
@@ -390,27 +399,19 @@ FUNCTION Prompt% (Db() AS Program, DbSize AS INTEGER)
 END FUNCTION
 
 '
-' Finds a program in the database by attempting to match the specified query.
+' Finds programs in the database by attempting to match the specified query.
 '
-' There are two virtual programs that can be matched by supplying a
-' specific query:
-'
-' * LIST, matched by providing "list" or "l".
-' * EXIT, matched by providing "exit" or "x".
-'
-' This function returns the special indices LISTIDX (-1) and
-' EXITIDX (-2) respectively when the virtual programs are matched.
-'
-' Returns NOTFOUND (-3) when no match could be found.
+' The matches will be stored in the supplied double-ended queue, which is cleared
+' of any data before the search begins.
 '
 ' @param Db Program() the program database
 ' @param DbSize INTEGER the number of programs in the database
+' @param Matches DequeNode() the queue data
+' @param MatchesDesc DequeDescriptor the queue descriptor
 ' @param Query STRING the query
 '
-' @return INTEGER the program index in the database or a special index
-'
-SUB Find (Db() AS Program, DbSize AS INTEGER, Matches() AS QueueNode, _
-                MatchesDesc AS QueueDescriptor, Query AS STRING)
+SUB Find (Db() AS Program, DbSize AS INTEGER, Matches() AS DequeNode, _
+          MatchesDesc AS DequeDescriptor, Query AS STRING)
     ' empty the queue
     MatchesDesc.Count = 0
 
@@ -421,7 +422,7 @@ SUB Find (Db() AS Program, DbSize AS INTEGER, Matches() AS QueueNode, _
     Query = UCASE$(Query)
 
     FOR I% = 0 TO DbSize - 1
-        IF RTRIM$(Db(I%).Basename) = Query THEN
+        IF RTRIM$(Db(I%).Command) = Query THEN
             AddFirst Matches(), MatchesDesc, I%
         ELSEIF INSTR(UCASE$(Db(I%).Title), Query) THEN
             AddLast Matches(), MatchesDesc, I%
@@ -429,29 +430,45 @@ SUB Find (Db() AS Program, DbSize AS INTEGER, Matches() AS QueueNode, _
     NEXT
 END SUB
 
-SUB AddFirst (Queue() AS QueueNode, QDesc AS QueueDescriptor, Value AS INTEGER)
-    AddLast Queue(), QDesc, Value
+'
+' Adds a node holding the provided value before the first element
+' of the double-ended queue.
+'
+' @param Deque DequeNode() the queue data
+' @param DequeDesc DequeDescriptor the queue descriptor
+' @param Value INTEGER the value to insert in the queue
+'
+SUB AddFirst (Deque() AS DequeNode, DequeDesc AS DequeDescriptor, Value AS INTEGER)
+    AddLast Deque(), DequeDesc, Value
     ' this only works due to the way AddLast functions!
-    QDesc.First = QDesc.Count - 1
+    DequeDesc.First = DequeDesc.Count - 1
 END SUB
 
-SUB AddLast (Queue() AS QueueNode, QDesc AS QueueDescriptor, Value AS INTEGER)
-    IF QDesc.Count = 0 THEN
-        Queue(0).Value = Value
-        Queue(0).Predecessor = 0
-        Queue(0).Successor = 0
-        QDesc.First = 0
-        QDesc.Count = 1
+'
+' Adds a node holding the provided value after the last element
+' of the double-ended queue.
+'
+' @param Deque DequeNode() the queue data
+' @param DequeDesc DequeDescriptor the queue descriptor
+' @param Value INTEGER the value to insert in the queue
+'
+SUB AddLast (Deque() AS DequeNode, DequeDesc AS DequeDescriptor, Value AS INTEGER)
+    IF DequeDesc.Count = 0 THEN
+        Deque(0).Value = Value
+        Deque(0).Predecessor = 0
+        Deque(0).Successor = 0
+        DequeDesc.First = 0
+        DequeDesc.Count = 1
     ELSE
         ' if there are Desc.Count elements in the queue, it is safe to
         ' overwrite the Desc.Count node, because the array is 0-based
-        Last% = Queue(QDesc.First).Predecessor
-        Queue(QDesc.Count).Value = Value
-        Queue(QDesc.Count).Successor = QDesc.First
-        Queue(QDesc.Count).Predecessor = Last%
-        Queue(Last%).Successor = QDesc.Count
-        Queue(QDesc.First).Predecessor = QDesc.Count
-        QDesc.Count = QDesc.Count + 1
+        Last% = Deque(DequeDesc.First).Predecessor
+        Deque(DequeDesc.Count).Value = Value
+        Deque(DequeDesc.Count).Successor = DequeDesc.First
+        Deque(DequeDesc.Count).Predecessor = Last%
+        Deque(Last%).Successor = DequeDesc.Count
+        Deque(DequeDesc.First).Predecessor = DequeDesc.Count
+        DequeDesc.Count = DequeDesc.Count + 1
     END IF
 END SUB
 
@@ -463,10 +480,9 @@ END SUB
 ' * LIST, which lists the programs in the database.
 ' * EXIT, which exits the program to DOS.
 '
-' They are invoked by suppliyng the special program indices LISTIDX (-1)
-' and EXITIDX (-2).
-'
-' Nothing is executed if NOTFOUND (-3) is passed as an index.
+' They are identified by LISTCMD (?) and EXITCMD (.) respectively.
+
+' Nothing is executed if NOTFOUND (-1) is passed as an index.
 '
 ' This function does not attempt to calculate the database size using
 ' UBOUND, but relies on the supplied program count.
@@ -474,13 +490,14 @@ END SUB
 ' @param Db Program() the program database
 ' @param DbSize INTEGER the number of programs in the database
 ' @param Index INTEGER the index of the program to execute
+' @param Path STRING the path where the batch files are found
 '
 SUB Exec (Db() AS Program, DbSize AS INTEGER, Index AS INTEGER, Path AS STRING)
     IF Index = NOTFOUND THEN
         EXIT SUB
     END IF
 
-    Cmd$ = RTRIM$(Db(Index).Basename)
+    Cmd$ = RTRIM$(Db(Index).Command)
     SELECT CASE Cmd$
         CASE LISTCMD
             LOCATE , , 0
@@ -489,7 +506,7 @@ SUB Exec (Db() AS Program, DbSize AS INTEGER, Index AS INTEGER, Path AS STRING)
                 IF ASC(Db(I%).Title) <> 0 THEN
                     PRINT RTRIM$(Db(I%).Title) + " [";
                 END IF
-                PRINT RTRIM$(Db(I%).Basename);
+                PRINT RTRIM$(Db(I%).Command);
                 IF ASC(Db(I%).Title) <> 0 THEN
                     PRINT "]";
                 END IF
