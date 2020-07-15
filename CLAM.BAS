@@ -37,6 +37,9 @@ TYPE DequeDescriptor
     Count AS INTEGER
 END TYPE
 
+' main subroutine
+DECLARE SUB Main (CommandLine AS STRING)
+
 ' loads the program database
 DECLARE FUNCTION LoadDatabase% (Db() AS Program, Path AS STRING)
 
@@ -80,24 +83,40 @@ CONST NOTFOUND = -1
 ' limit for QuickSort function, so that it never uses more than ~4K of RAM
 CONST SORTLIMIT = 1024
 
-' get the first command line argument, it contains the path
-Index% = INSTR(COMMAND$, " ")
-IF Index% <> 0 THEN
-    Path$ = LEFT$(COMMAND$, Index%) + "\"
-ELSE
-    Path$ = COMMAND$ + "\"
-END IF
+' message to display when prompting the user for a keypress
+CONST CONTINUEMSG = "Press any key to continue..."
 
-' REDIM is necessary because the final size may be different after
-' invoking the loading function
-REDIM Db(63) AS Program
-DbSize% = LoadDatabase%(Db(), Path$)
+' call the main subroutine
+Main COMMAND$
 
-PRINT
-DO:
-    Index% = Prompt%(Db(), DbSize%)
-    Exec Db(), DbSize%, Index%, Path$
-LOOP
+'
+' Main subroutine.
+'
+' Loads the program database and continuously prompts the user for a command
+' to execute.
+'
+' @param CommandLine STRING the command line arguments
+'
+SUB Main (CommandLine AS STRING)
+    ' REDIM is necessary because the final size may be different after
+    ' invoking the loading function
+    REDIM Db(63) AS Program
+
+    ' get the first command line argument which contains the path
+    Index% = INSTR(CommandLine, " ")
+    IF Index% <> 0 THEN
+        Path$ = LEFT$(CommandLine, Index%) + "\"
+    ELSE
+        Path$ = CommandLine + "\"
+    END IF
+
+    DbSize% = LoadDatabase%(Db(), Path$)
+    PRINT
+    DO
+        Index% = Prompt%(Db(), DbSize%)
+        Exec Db(), DbSize%, Index%, Path$
+    LOOP
+END SUB
 
 '
 ' Loads program database from the batch files in the specified path
@@ -491,7 +510,7 @@ END SUB
 ' * EXIT, which exits the program to DOS.
 '
 ' They are identified by LISTCMD (?) and EXITCMD (.) respectively.
-
+'
 ' Nothing is executed if NOTFOUND (-1) is passed as an index.
 '
 ' This function does not attempt to calculate the database size using
@@ -520,18 +539,16 @@ SUB Exec (Db() AS Program, DbSize AS INTEGER, Index AS INTEGER, Path AS STRING)
                 IF ASC(Db(I%).Title) <> 0 THEN
                     PRINT "]";
                 END IF
+                PRINT
 
-                ' clears the rest of the row, it can be dirty from the
-                ' "Press any key" prompt
-                PRINT SPACE$(SCREENCOLS + 1 - POS(0))
-
-                ' each SCREENROWS - 2 (22) rows, asks the user for a keypress
-                IF (I% + 1) MOD (SCREENROWS - 2) = 0 THEN
-                    PRINT
-                    PRINT "Press any key to continue ...";
-                    SLEEP
-                    Unused$ = INKEY$
-                    LOCATE CSRLIN - 1, 1
+                ' each SCREENROWS - 1 (23) rows, asks the user for a keypress
+                IF (I% + 1) MOD (SCREENROWS - 1) = 0 THEN
+                    PRINT CONTINUEMSG;
+                    Unused$ = INPUT$(1)
+                    ' clear the "Press any key" message
+                    LOCATE , 1
+                    PRINT SPACE$(LEN(CONTINUEMSG));
+                    LOCATE , 1
                 END IF
             NEXT
             PRINT "  "; DbSize; "program(s)"
