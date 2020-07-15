@@ -37,8 +37,34 @@ TYPE DequeDescriptor
     Count AS INTEGER
 END TYPE
 
+' loads the program database
+DECLARE FUNCTION LoadDatabase% (Db() AS Program, Path AS STRING)
+
+' sorts the program database
+DECLARE SUB QuickSort (Db() AS Program, Size AS INTEGER, Limit AS INTEGER)
+
+' prompts the user for input
+DECLARE FUNCTION Prompt% (Db() AS Program, DbSize AS INTEGER)
+
+' finds programs in the database
+DECLARE SUB Find (Db() AS Program, DbSize AS INTEGER, Matches() AS DequeNode, _
+                  MatchesDesc AS DequeDescriptor, Query AS STRING)
+
+' adds an element before the first element of the queue
+DECLARE SUB AddFirst (Deque() AS DequeNode, DequeDesc AS DequeDescriptor, _
+                      Value AS INTEGER)
+
+' adds an element after the last element of the queue
+DECLARE SUB AddLast (Deque() AS DequeNode, DequeDesc AS DequeDescriptor, _
+                     Value AS INTEGER)
+
+' executes a program
+DECLARE SUB Exec (Db() AS Program, DbSize AS INTEGER, Index AS INTEGER, _
+                  Path AS STRING)
+
 ' 80x25 text mode, but QuickBasic doesn't normally use the last row,
 ' so the effective rows are 24
+SCREEN 0
 CONST SCREENROWS = 24, SCREENCOLS = 80
 
 ' booleans
@@ -54,31 +80,13 @@ CONST NOTFOUND = -1
 ' limit for QuickSort function, so that it never uses more than ~4K of RAM
 CONST SORTLIMIT = 1024
 
-' loads the program database
-DECLARE FUNCTION LoadDatabase% (Db() AS Program, Path AS STRING)
-
-' sorts the program database
-DECLARE SUB QuickSort (Db() AS Program, Size AS INTEGER, Limit AS INTEGER)
-
-' prompts the user for input
-DECLARE FUNCTION Prompt% (Db() AS Program, DbSize AS INTEGER)
-
-' finds programs in the database
-DECLARE SUB Find (Db() AS Program, DbSize AS INTEGER, Matches() AS DequeNode, _
-                  MatchesDesc AS DequeDescriptor, Query AS STRING)
-
-' adds an element before the first element of the queue
-DECLARE SUB AddFirst (Queue() AS DequeNode, QDesc AS DequeDescriptor, Value AS INTEGER)
-
-' adds an element after the last element of the queue
-DECLARE SUB AddLast (Queue() AS DequeNode, QDesc AS DequeDescriptor, Value AS INTEGER)
-
-' executes a program
-DECLARE SUB Exec (Db() AS Program, DbSize AS INTEGER, _
-                  Index AS INTEGER, Path AS STRING)
-
-' COMMAND$ contains the path as first (and only) argument
-Path$ = COMMAND$ + "\"
+' get the first command line argument, it contains the path
+Index% = INSTR(COMMAND$, " ")
+IF Index% <> 0 THEN
+    Path$ = LEFT$(COMMAND$, Index%) + "\"
+ELSE
+    Path$ = COMMAND$ + "\"
+END IF
 
 ' REDIM is necessary because the final size may be different after
 ' invoking the loading function
@@ -401,8 +409,8 @@ END FUNCTION
 '
 ' Finds programs in the database by attempting to match the specified query.
 '
-' The matches will be stored in the supplied double-ended queue, which is cleared
-' of any data before the search begins.
+' The matches will be stored in the supplied double-ended queue, which is
+' cleared of any data before the search begins.
 '
 ' @param Db Program() the program database
 ' @param DbSize INTEGER the number of programs in the database
@@ -438,7 +446,8 @@ END SUB
 ' @param DequeDesc DequeDescriptor the queue descriptor
 ' @param Value INTEGER the value to insert in the queue
 '
-SUB AddFirst (Deque() AS DequeNode, DequeDesc AS DequeDescriptor, Value AS INTEGER)
+SUB AddFirst (Deque() AS DequeNode, DequeDesc AS DequeDescriptor, _
+              Value AS INTEGER)
     AddLast Deque(), DequeDesc, Value
     ' this only works due to the way AddLast functions!
     DequeDesc.First = DequeDesc.Count - 1
@@ -452,7 +461,8 @@ END SUB
 ' @param DequeDesc DequeDescriptor the queue descriptor
 ' @param Value INTEGER the value to insert in the queue
 '
-SUB AddLast (Deque() AS DequeNode, DequeDesc AS DequeDescriptor, Value AS INTEGER)
+SUB AddLast (Deque() AS DequeNode, DequeDesc AS DequeDescriptor, _
+             Value AS INTEGER)
     IF DequeDesc.Count = 0 THEN
         Deque(0).Value = Value
         Deque(0).Predecessor = 0
@@ -513,10 +523,10 @@ SUB Exec (Db() AS Program, DbSize AS INTEGER, Index AS INTEGER, Path AS STRING)
 
                 ' clears the rest of the row, it can be dirty from the
                 ' "Press any key" prompt
-                PRINT SPACE$(80 - POS(0))
+                PRINT SPACE$(SCREENCOLS + 1 - POS(0))
 
-                ' each 22 rows, asks the user for a keypress
-                IF (I% + 1) MOD 22 = 0 THEN
+                ' each SCREENROWS - 2 (22) rows, asks the user for a keypress
+                IF (I% + 1) MOD (SCREENROWS - 2) = 0 THEN
                     PRINT
                     PRINT "Press any key to continue ...";
                     SLEEP
@@ -524,7 +534,7 @@ SUB Exec (Db() AS Program, DbSize AS INTEGER, Index AS INTEGER, Path AS STRING)
                     LOCATE CSRLIN - 1, 1
                 END IF
             NEXT
-            PRINT "   "; DbSize; " program(s)"
+            PRINT "  "; DbSize; "program(s)"
             LOCATE , , 1
         CASE EXITCMD
             END
